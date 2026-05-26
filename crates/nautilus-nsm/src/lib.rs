@@ -13,6 +13,9 @@ use nautilus::{AttestationError, AttestationRequest, Attestor, EnclaveIdentity, 
 const DEFAULT_NSM_DEVICE_PATH: &str = "/dev/nsm";
 const NSM_REQUEST_MAX_SIZE: usize = 0x1000;
 const NSM_RESPONSE_MAX_SIZE: usize = 0x3000;
+#[cfg(target_env = "musl")]
+const NSM_IOCTL_REQUEST: libc::c_int = -1071642112;
+#[cfg(not(target_env = "musl"))]
 const NSM_IOCTL_REQUEST: libc::c_ulong = 0xC020_0A00;
 
 #[repr(C)]
