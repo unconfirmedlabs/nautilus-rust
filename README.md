@@ -9,10 +9,11 @@ It provides the reusable enclave pieces that should be common across Nautilus pr
 - per-boot Ed25519 enclave identity
 - Sui address derivation from the enclave public key
 - signed application responses
+- Kagi-compatible BCS intent signing
 - attestation request plumbing
 - local deterministic test fakes
 - Axum route helpers for simple enclave services
-- deterministic-build groundwork
+- deterministic EIF build scaffolding
 
 Application developers should import `nautilus` into their own enclave app crate. They should not edit the framework crate for app-specific business logic.
 
@@ -32,11 +33,17 @@ Nautilus Rust owns in-enclave application primitives:
 
 Nautilus Rust does not own parent-instance orchestration, host-side services, S3 access, outbound networking, or general host-to-enclave transport.
 
+Nautilus Rust also does not own on-chain verification. Use Kagi for the Sui Move side:
+
+https://github.com/unconfirmedlabs/kagi
+
+Kagi is the companion Move package for registering Nitro enclave public keys against PCR policy and verifying enclave-signed messages on-chain. Nautilus Rust produces the in-enclave artifacts Kagi expects: a Nitro attestation document bound to an Ed25519 public key, plus signatures over Kagi-compatible BCS intent messages.
+
 For parent host to enclave communication over vsock, and for host-mediated outbound networking, use Argonaut:
 
 https://github.com/unconfirmedlabs/argonaut
 
-The split is deliberate. A Nautilus app that only needs bytes streamed into the enclave can keep the EIF smaller and avoid embedding outbound networking inside the enclave. When an app needs host services, proxying, lifecycle management, or outbound access, Argonaut should sit outside the enclave and communicate with the Nautilus app over the parent/enclave boundary.
+The split is deliberate. Nautilus Rust should own code that must be measured inside the enclave. Kagi should own on-chain verification. Argonaut should own parent-host transport, proxying, lifecycle, and outbound integration.
 
 ## Repository Layout
 
@@ -50,7 +57,11 @@ examples/
 docs/
   app-development.md
   attestation.md
+  kagi.md
   reproducible-builds.md
+  signing-vectors.md
+Containerfile.eif # generic reproducible EIF builder
+Makefile          # EIF build targets
 ```
 
 ## Crates
@@ -184,6 +195,19 @@ async fn main() -> anyhow::Result<()> {
 
 In a production project, choose the context from configuration or compile-time feature flags so local tests do not require `/dev/nsm`.
 
+## Kagi Integration
+
+Use Kagi when a Sui Move contract needs to verify Nautilus Rust output.
+
+The intended split is:
+
+- `nautilus-rust`: enclave identity, attestation request, and signed response generation
+- `kagi`: PCR policy, attestation-document validation, enclave registration, and Ed25519 verification on-chain
+
+The signing contract is a BCS intent message containing `intent: u8`, `timestamp_ms: u64`, and the app payload. `NautilusContext::sign_bcs_payload` signs the same layout Kagi verifies in Move.
+
+See [docs/kagi.md](docs/kagi.md) and [docs/signing-vectors.md](docs/signing-vectors.md).
+
 ## Standard Routes
 
 `nautilus::router` creates four routes:
@@ -219,7 +243,7 @@ Nautilus binds application signatures to Nitro attestation:
 5. The verifier validates the Nitro attestation document, PCRs, nonce, and public key.
 6. The verifier accepts `/process_data` signatures only from the attested public key.
 
-The current framework returns raw Nitro attestation document bytes as lowercase hex. Verifier-side COSE and certificate-chain validation belongs in the client or host system that consumes the document.
+The current framework returns raw Nitro attestation document bytes as lowercase hex. Verifier-side COSE and certificate-chain validation belongs in the client, host system, or Kagi/Sui Move code that consumes the document.
 
 ## Argonaut Integration
 
@@ -237,9 +261,9 @@ Nautilus Rust should remain focused on code that must be measured inside the enc
 
 ## Deterministic Build Groundwork
 
-This repository is structured so deterministic release builds can be added cleanly:
+This repository includes deterministic release-build settings and a generic EIF build scaffold:
 
-- `rust-toolchain.toml` pins the Rust compiler version.
+- `rust-toolchain.toml` pins the local development compiler version.
 - `Cargo.lock` is committed and CI uses `--locked`.
 - The workspace uses resolver v2.
 - Release builds use one codegen unit, full LTO, stripped symbols, and `panic = "abort"`.
@@ -247,8 +271,10 @@ This repository is structured so deterministic release builds can be added clean
 - The NSM unsafe boundary is isolated to `nautilus-nsm`.
 - There are no `build.rs` scripts.
 - CI enforces formatting, clippy, and locked tests.
+- `Containerfile.eif` uses pinned StageX inputs, normalized initramfs timestamps, and `eif_build`.
+- `make eif` emits `out/nitro.eif`, `out/nitro.pcrs`, and `out/rootfs.cpio`.
 
-For release builds, use a fixed build environment and path remapping:
+For Rust-only release builds, use a fixed build environment and path remapping:
 
 ```shell
 export SOURCE_DATE_EPOCH=0
@@ -256,7 +282,22 @@ export RUSTFLAGS="--remap-path-prefix=$(pwd)=/workspace"
 cargo build --workspace --release --locked
 ```
 
-For enclave release artifacts, the reproducibility target is the EIF measurement, not just the Rust binary hash. Pin the container base image, kernel, initramfs contents, file ordering, timestamps, compression settings, and EIF build tool version.
+The EIF builder pins StageX `core-rust` to Rust 1.94.0 and includes the matching `sx2026.03.0` runtime layers needed by that toolchain. Keep `workspace.package.rust-version` compatible with the pinned Rust toolchain before publishing PCRs.
+
+Build the default example EIF:
+
+```shell
+make eif
+cat out/nitro.pcrs
+```
+
+Build a different workspace package:
+
+```shell
+make eif ENCLAVE_PACKAGE=my-enclave-app ENCLAVE_BIN=my-enclave-app
+```
+
+For enclave release artifacts, the reproducibility target is the EIF measurement, not just the Rust binary hash. Keep the container base image, kernel, initramfs contents, file ordering, timestamps, compression settings, and EIF build tool version pinned.
 
 See [docs/reproducible-builds.md](docs/reproducible-builds.md).
 
@@ -268,6 +309,7 @@ The test suite covers:
 - Ed25519 signing and verification
 - Sui address formatting
 - intent message layout
+- Kagi-compatible signing vector
 - BCS payload signing
 - fake attestation request recording
 - attestation public-key binding
@@ -301,9 +343,8 @@ This keeps the measured enclave surface smaller and makes it easier to reason ab
 
 This is an initial framework repository. It is ready for local app prototyping and crate-level testing. Before using it for production enclaves, add project-specific:
 
-- verifier-side attestation validation
-- PCR policy
-- EIF build pipeline
+- Kagi PCR policy and on-chain registration
+- project-specific EIF build review
 - release signing
 - deployment automation
 - parent-host Argonaut configuration

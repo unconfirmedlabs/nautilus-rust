@@ -13,6 +13,16 @@ The `nautilus` crate exposes the `Attestor` trait. The `nautilus-nsm` crate impl
 
 Tests and local examples use `FakeAttestor`, which makes route behavior testable without Nitro hardware.
 
+## Kagi
+
+For Sui Move verification, use Kagi:
+
+https://github.com/unconfirmedlabs/kagi
+
+Kagi owns PCR policy, Nitro attestation document validation, public-key registration, and Ed25519 verification on-chain. Nautilus Rust owns producing the attestation document and signing responses with the attested key.
+
+See [kagi.md](kagi.md).
+
 ## Nitro Runtime
 
 Use `nautilus_nsm::NsmAttestor` inside the enclave:

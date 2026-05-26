@@ -65,6 +65,12 @@ mod tests {
         amount: u64,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    struct WeatherPayload {
+        location: String,
+        temperature: u64,
+    }
+
     #[test]
     fn intent_message_layout_is_stable() {
         let payload = [0xaa, 0xbb, 0xcc];
@@ -90,5 +96,38 @@ mod tests {
         let message = intent_message(1, 42, &payload_bcs);
         let signature: [u8; 64] = hex::decode(signed.signature).unwrap().try_into().unwrap();
         ctx.identity().verify(&message, &signature).unwrap();
+    }
+
+    #[test]
+    fn kagi_weather_intent_vector_is_stable() {
+        let ctx = NautilusContext::new(
+            EnclaveIdentity::from_seed([5u8; 32]),
+            FakeAttestor::default(),
+        );
+        let payload = WeatherPayload {
+            location: "San Francisco".to_owned(),
+            temperature: 13,
+        };
+        let payload_bcs = bcs::to_bytes(&payload).unwrap();
+        let message = intent_message(0, 1_744_038_900_000, &payload_bcs);
+
+        assert_eq!(
+            hex::encode(&payload_bcs),
+            "0d53616e204672616e636973636f0d00000000000000"
+        );
+        assert_eq!(
+            hex::encode(&message),
+            "0020b1d110960100000d53616e204672616e636973636f0d00000000000000"
+        );
+        assert_eq!(
+            ctx.public_key_hex(),
+            "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
+        );
+
+        let signed = ctx.sign_bcs_payload(0, 1_744_038_900_000, payload).unwrap();
+        assert_eq!(
+            signed.signature,
+            "ef241b08b951a8451f9de2a414530856059ace7acbb9ff5c114839dc697252f5685163eef75db9a0ce497533638f1e66e791edcf8790005d2fa0d2c3b0c39909"
+        );
     }
 }

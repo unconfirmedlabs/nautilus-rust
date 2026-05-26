@@ -18,6 +18,7 @@ my-enclave-app/
 - attestation route helpers
 - request size limits
 - test fakes
+- Kagi-compatible BCS intent signing
 
 ## Routes
 
@@ -29,6 +30,16 @@ my-enclave-app/
 - `POST /process_data`
 
 `POST /process_data` receives raw request bytes and passes them to the handler you provide.
+
+## Signed Responses
+
+For responses that will be verified on-chain with Kagi, sign a BCS payload:
+
+```rust
+let signed = ctx.sign_bcs_payload(intent, timestamp_ms, payload)?;
+```
+
+The signed bytes match Kagi's Move `IntentMessage<T>` layout. See [signing-vectors.md](signing-vectors.md).
 
 ## Error Mapping
 
