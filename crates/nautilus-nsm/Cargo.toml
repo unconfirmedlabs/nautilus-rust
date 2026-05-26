@@ -1,0 +1,17 @@
+[package]
+name = "nautilus-nsm"
+description = "AWS Nitro Secure Module adapter for Nautilus Rust"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+ciborium.workspace = true
+libc.workspace = true
+nautilus = { path = "../nautilus" }
+
+[dev-dependencies]
+hex.workspace = true

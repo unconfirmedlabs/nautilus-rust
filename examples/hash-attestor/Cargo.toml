@@ -1,0 +1,18 @@
+[package]
+name = "nautilus-example-hash-attestor"
+description = "Generic Nautilus Rust hash-and-sign example"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+hex.workspace = true
+nautilus = { path = "../../crates/nautilus" }
+serde.workspace = true
+sha2.workspace = true
+tokio.workspace = true

@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "crates/nautilus",
+    "crates/nautilus-nsm",
+    "examples/hash-attestor",
+    "examples/hello-world",
+]
+resolver = "2"
+
+[workspace.package]
+authors = ["Unconfirmed Labs"]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/unconfirmedlabs/nautilus-rust"
+rust-version = "1.94"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+bcs = "0.1"
+blake2 = "0.10"
+ciborium = "0.2"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"
+http-body-util = "0.1"
+libc = "0.2"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"

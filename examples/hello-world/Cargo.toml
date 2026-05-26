@@ -1,0 +1,16 @@
+[package]
+name = "nautilus-example-hello-world"
+description = "Minimal Nautilus Rust signed response example"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+nautilus = { path = "../../crates/nautilus" }
+serde.workspace = true
+tokio.workspace = true
