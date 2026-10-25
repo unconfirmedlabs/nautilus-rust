@@ -28,6 +28,7 @@ The default package is `nautilus-example-hash-attestor`, built without `test-uti
 
 - builds the package for `x86_64-unknown-linux-musl` with a static, relocation-free binary;
 - copies it to `/nautilus-app` with `eif/run.sh` as the init target, which brings up loopback for outbound bridges and execs the app; the app serves vsock port 3000 itself;
+- puts only the app, `run.sh`, busybox, musl and nit in the initramfs. There are no CA certificates or TLS libraries, since no workspace crate makes outbound TLS connections; an app that does must add its trust roots to the image, which changes PCR2;
 - sets initramfs timestamps to epoch 0, sorts entries, and writes `cpio --reproducible` through `gzip --best --no-name`;
 - runs `eif_build` with a fixed kernel and command line and writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
 
