@@ -81,7 +81,7 @@ pub fn verify_signed_response<T: Serialize>(
     verify_ed25519(public_key, &bytes, &signature)
 }
 
-/// Returns Unix time in milliseconds, never lower than a previous call in this process.
+/// Returns Unix time in milliseconds, never lower than a previous call in this process; the floor is process-wide, shared by every context.
 pub fn now_ms() -> Result<u64, NautilusError> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)

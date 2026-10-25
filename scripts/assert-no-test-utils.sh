@@ -19,6 +19,11 @@ if [ "$#" -gt 0 ]; then
 	esac
 fi
 
+if ! cargo tree --locked -p "$package" -e normal --prefix none "$@" | grep -q '^nautilus v'; then
+	echo "error: $package does not depend on nautilus; check the package name" >&2
+	exit 1
+fi
+
 tree=$(cargo tree --locked -p "$package" -e normal,features -i nautilus --prefix none "$@")
 
 if printf '%s\n' "$tree" | grep -q '^nautilus feature "test-utils"'; then

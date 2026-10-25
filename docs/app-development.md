@@ -137,6 +137,14 @@ A request takes its concurrency slot before reading the body, so buffered memory
 
 A blocking handler that times out keeps its concurrency slot until it actually returns, so a stuck handler cannot be replaced by unbounded new work.
 
+On shutdown, `serve` returns once connections have drained, even while a timed-out blocking handler is still running. The `#[tokio::main]` runtime then waits for that thread when it is dropped, so the process does not exit until the handler returns. Inside an enclave this does not matter, since `nitro-cli terminate-enclave` stops it regardless. For local runs and tests, build the runtime yourself and bound the wait:
+
+```rust
+let runtime = tokio::runtime::Runtime::new()?;
+runtime.block_on(nautilus::serve(addr, app, config))?;
+runtime.shutdown_timeout(std::time::Duration::from_secs(5));
+```
+
 ### Memory Sizing
 
 The initramfs, including your binary, lives in enclave RAM. Size enclave memory to cover:
