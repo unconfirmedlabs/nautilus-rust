@@ -211,9 +211,7 @@ pub fn golden_vector<T: Serialize + ?Sized>(
     })
 }
 
-/// Generates one `#[test]` per entry that prints the vector as JSON and asserts its intent message hex.
-///
-/// `name: (intent, timestamp_ms, payload) => "hex";`
+/// Generates one `#[test]` per `name: (intent, timestamp_ms, payload) => "hex";` entry that prints and asserts the vector.
 #[macro_export]
 macro_rules! golden_vectors {
     ($($name:ident: ($intent:expr, $timestamp_ms:expr, $payload:expr $(,)?) => $hex:expr;)+) => {

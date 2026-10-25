@@ -41,9 +41,7 @@ impl EnclaveIdentity {
         Self::from_seed_bytes(seed)
     }
 
-    /// Generates a new identity by XOR-mixing OS randomness and caller-provided entropy.
-    ///
-    /// When called inside Nitro, pass NSM RNG output as `extra_entropy`.
+    /// Generates a new identity by XOR-mixing OS randomness with caller entropy, such as NSM output.
     pub fn generate_with_entropy(extra_entropy: &[u8]) -> Self {
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
@@ -106,9 +104,7 @@ pub(crate) fn verify_ed25519(
         .map_err(|error| NautilusError::Crypto(error.to_string()))
 }
 
-/// Derives a Sui address from an Ed25519 public key.
-///
-/// Sui address = `blake2b256(0x00 || public_key)`.
+/// Derives the Sui address `blake2b256(0x00 || public_key)` of an Ed25519 public key.
 pub fn sui_address(public_key: &PublicKeyBytes) -> String {
     let mut hasher = Blake2bVar::new(32).expect("valid Blake2b output length");
     hasher.update(&[0x00]);
