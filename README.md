@@ -55,7 +55,7 @@ test-utils = ["nautilus/test-utils"]
 [dependencies]
 anyhow = "1"
 axum = "0.8"
-nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust", tag = "v0.2.0", features = ["vsock"] }
+nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust", tag = "v0.3.0", features = ["vsock"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

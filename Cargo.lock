@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "nautilus"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "bcs",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "nautilus-example-hash-attestor"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "nautilus-example-hello-world"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "nautilus-nsm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "libc",
