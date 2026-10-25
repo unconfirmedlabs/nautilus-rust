@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+test-utils = ["nautilus/test-utils"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
@@ -16,3 +19,4 @@ nautilus = { path = "../../crates/nautilus" }
 serde.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+tracing-subscriber.workspace = true

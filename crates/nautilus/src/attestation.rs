@@ -36,6 +36,9 @@ impl AttestationRequest {
 
 /// Attestation provider abstraction.
 pub trait Attestor: Send + Sync + 'static {
+    /// Returns a short name identifying the provider kind.
+    fn name(&self) -> &'static str;
+
     /// Returns a raw attestation document.
     fn attest(&self, request: AttestationRequest) -> Result<Vec<u8>, AttestationError>;
 

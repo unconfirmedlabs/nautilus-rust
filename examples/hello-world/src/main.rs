@@ -21,7 +21,11 @@ async fn process_data(bytes: Bytes, ctx: NautilusContext) -> Result<HelloRespons
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().init();
+    #[cfg(feature = "test-utils")]
     let ctx = NautilusContext::development();
+    #[cfg(not(feature = "test-utils"))]
+    let ctx = NautilusContext::from_runtime()?;
     let app = nautilus::router(ctx, process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await
 }

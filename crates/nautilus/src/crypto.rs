@@ -38,7 +38,7 @@ impl EnclaveIdentity {
     pub fn generate() -> Self {
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
-        Self::from_seed(seed)
+        Self::from_seed_bytes(seed)
     }
 
     /// Generates a new identity by XOR-mixing OS randomness and caller-provided entropy.
@@ -50,11 +50,16 @@ impl EnclaveIdentity {
         for (index, byte) in extra_entropy.iter().take(32).enumerate() {
             seed[index] ^= byte;
         }
-        Self::from_seed(seed)
+        Self::from_seed_bytes(seed)
     }
 
-    /// Creates an identity from a fixed seed. Intended for tests.
+    /// Creates an identity from a fixed seed. Test-only: the key is as public as the seed.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self::from_seed_bytes(seed)
+    }
+
+    fn from_seed_bytes(seed: [u8; 32]) -> Self {
         Self {
             signing_key: Arc::new(SigningKey::from_bytes(&seed)),
         }

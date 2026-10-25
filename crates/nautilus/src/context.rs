@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    AttestationRequest, Attestor, EnclaveIdentity, NautilusError, PublicKeyBytes, SignatureBytes,
-    Signer as _, encode_hex,
+    AttestationRequest, Attestor, EnclaveIdentity, NautilusError, NsmAttestor, PublicKeyBytes,
+    SignatureBytes, Signer as _, encode_hex,
     intent::{SignedIntent, sign_bcs_payload},
 };
 
@@ -16,18 +16,47 @@ pub struct NautilusContext {
 impl NautilusContext {
     /// Creates a context from an identity and attestation provider.
     pub fn new(identity: EnclaveIdentity, attestor: impl Attestor) -> Self {
-        Self {
+        let ctx = Self {
             identity,
             attestor: Arc::new(attestor),
-        }
+        };
+        tracing::info!(
+            attestor = ctx.attestor_name(),
+            public_key = %ctx.public_key_hex(),
+            address = %ctx.sui_address(),
+            "nautilus context ready"
+        );
+        ctx
     }
 
-    /// Creates a local development context with deterministic identity and fake attestation.
+    /// Creates the production context: opens `/dev/nsm` and generates a per-boot identity mixed with NSM entropy.
+    pub fn from_runtime() -> Result<Self, NautilusError> {
+        Self::with_entropy_from(NsmAttestor::open()?)
+    }
+
+    fn with_entropy_from(attestor: impl Attestor) -> Result<Self, NautilusError> {
+        let entropy = attestor.random(32)?;
+        Ok(Self::new(
+            EnclaveIdentity::generate_with_entropy(&entropy),
+            attestor,
+        ))
+    }
+
+    /// Creates a local development context with a public deterministic identity and fake attestation.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn development() -> Self {
+        tracing::warn!(
+            "development context: the signing key is public and fake attestation must never be deployed"
+        );
         Self::new(
             EnclaveIdentity::from_seed([42u8; 32]),
             crate::testing::FakeAttestor::default(),
         )
+    }
+
+    /// Returns the name of the configured attestation provider.
+    pub fn attestor_name(&self) -> &'static str {
+        self.attestor.name()
     }
 
     /// Returns the underlying identity.
@@ -93,9 +122,47 @@ impl NautilusContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::{EnclaveIdentity, testing::FakeAttestor};
+    use std::path::Path;
+
+    use nautilus_nsm::{DEVICE_PATH, Nsm};
+
+    use crate::{AttestationError, EnclaveIdentity, testing::FakeAttestor};
 
     use super::*;
+
+    #[test]
+    fn missing_nsm_device_is_unavailable() {
+        let error = Nsm::open_path("/no/such/nsm")
+            .map(NsmAttestor::new)
+            .map_err(AttestationError::from)
+            .unwrap_err();
+        assert!(matches!(error, AttestationError::Unavailable(_)));
+    }
+
+    #[test]
+    fn from_runtime_fails_without_nsm_device() {
+        if Path::new(DEVICE_PATH).exists() {
+            return;
+        }
+        let error = NautilusContext::from_runtime().err().unwrap();
+        assert!(matches!(
+            error,
+            NautilusError::Attestation(AttestationError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn entropy_identity_differs_per_boot() {
+        let a = NautilusContext::with_entropy_from(FakeAttestor::default()).unwrap();
+        let b = NautilusContext::with_entropy_from(FakeAttestor::default()).unwrap();
+        assert_eq!(a.attestor_name(), "fake");
+        assert_ne!(a.public_key(), b.public_key());
+    }
+
+    #[test]
+    fn development_uses_fake_attestor() {
+        assert_eq!(NautilusContext::development().attestor_name(), "fake");
+    }
 
     #[test]
     fn attestation_binds_context_public_key() {

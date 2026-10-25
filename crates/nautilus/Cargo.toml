@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+test-utils = []
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
@@ -15,11 +18,13 @@ bcs.workspace = true
 blake2.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
+nautilus-nsm = { path = "../nautilus-nsm" }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true

@@ -26,7 +26,15 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run tests
         run: cargo test --workspace --all-targets --locked
+
+      - name: Run tests with test-utils
+        run: cargo test --workspace --all-targets --locked --features test-utils
+
+      - name: Check examples do not enable test-utils
+        run: |
+          sh scripts/assert-no-test-utils.sh nautilus-example-hash-attestor x86_64-unknown-linux-musl
+          sh scripts/assert-no-test-utils.sh nautilus-example-hello-world x86_64-unknown-linux-musl

@@ -1,22 +1,57 @@
-//! AWS Nitro Secure Module adapter for Nautilus.
+//! AWS Nitro Secure Module driver for `/dev/nsm`.
 
 use std::{
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
 };
 
 use ciborium::value::Value;
-use nautilus::{AttestationError, AttestationRequest, Attestor, EnclaveIdentity, NautilusContext};
+use thiserror::Error;
 
-const DEFAULT_NSM_DEVICE_PATH: &str = "/dev/nsm";
+/// Path of the NSM device inside a Nitro Enclave.
+pub const DEVICE_PATH: &str = "/dev/nsm";
+
+const PUBLIC_KEY_LEN: usize = 32;
 const NSM_REQUEST_MAX_SIZE: usize = 0x1000;
 const NSM_RESPONSE_MAX_SIZE: usize = 0x3000;
 #[cfg(target_env = "musl")]
 const NSM_IOCTL_REQUEST: libc::c_int = -1071642112;
 #[cfg(not(target_env = "musl"))]
 const NSM_IOCTL_REQUEST: libc::c_ulong = 0xC020_0A00;
+
+/// Errors returned by the NSM driver.
+#[derive(Debug, Error)]
+pub enum NsmError {
+    /// The NSM device could not be opened.
+    #[error("NSM device {} unavailable: {source}", path.display())]
+    Unavailable {
+        /// Device path that failed to open.
+        path: PathBuf,
+        /// Underlying open error.
+        source: io::Error,
+    },
+    /// The NSM ioctl failed.
+    #[error("NSM I/O error: {0}")]
+    Io(#[from] io::Error),
+    /// The request was rejected before reaching the device.
+    #[error("invalid NSM request: {0}")]
+    InvalidRequest(String),
+    /// The device returned a response that could not be decoded.
+    #[error("malformed NSM response: {0}")]
+    MalformedResponse(String),
+    /// The device returned an explicit error.
+    #[error("NSM device error: {0}")]
+    Device(String),
+}
+
+/// Handle to an open NSM device.
+#[derive(Debug)]
+pub struct Nsm {
+    device: Mutex<File>,
+}
 
 #[repr(C)]
 struct Iovec {
@@ -30,66 +65,74 @@ struct NsmMessage {
     response: Iovec,
 }
 
-/// Real AWS Nitro Secure Module attestation provider.
-#[derive(Debug, Clone)]
-pub struct NsmAttestor {
-    device_path: PathBuf,
-}
-
-impl Default for NsmAttestor {
-    fn default() -> Self {
-        Self::new(DEFAULT_NSM_DEVICE_PATH)
-    }
-}
-
-impl NsmAttestor {
-    /// Creates an attestor that opens `device_path` for each request.
-    pub fn new(device_path: impl Into<PathBuf>) -> Self {
-        Self {
-            device_path: device_path.into(),
-        }
+impl Nsm {
+    /// Opens the NSM device at [`DEVICE_PATH`].
+    pub fn open() -> Result<Self, NsmError> {
+        Self::open_path(DEVICE_PATH)
     }
 
-    /// Returns the configured NSM device path.
-    pub fn device_path(&self) -> &Path {
-        &self.device_path
-    }
-
-    /// Creates a Nautilus context using this NSM attestor.
-    ///
-    /// The per-boot signing identity is generated from OS randomness mixed with
-    /// NSM entropy, then bound into attestation documents through `public_key`.
-    pub fn into_context(self) -> Result<NautilusContext, AttestationError> {
-        let entropy = self.random(32)?;
-        let identity = EnclaveIdentity::generate_with_entropy(&entropy);
-        Ok(NautilusContext::new(identity, self))
-    }
-
-    fn transact(&self, request: &[u8]) -> Result<Vec<u8>, AttestationError> {
-        if request.is_empty() {
-            return Err(AttestationError::InvalidRequest(
-                "NSM request cannot be empty".to_owned(),
-            ));
-        }
-        if request.len() > NSM_REQUEST_MAX_SIZE {
-            return Err(AttestationError::InvalidRequest(format!(
-                "NSM request too large: {} > {}",
-                request.len(),
-                NSM_REQUEST_MAX_SIZE
-            )));
-        }
-
+    /// Opens an NSM device at `path`.
+    pub fn open_path(path: impl AsRef<Path>) -> Result<Self, NsmError> {
+        let path = path.as_ref();
         let device = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(&self.device_path)
-            .map_err(|error| {
-                AttestationError::Unavailable(format!(
-                    "failed to open {}: {error}",
-                    self.device_path.display()
-                ))
+            .open(path)
+            .map_err(|source| NsmError::Unavailable {
+                path: path.to_owned(),
+                source,
             })?;
+        Ok(Self {
+            device: Mutex::new(device),
+        })
+    }
 
+    /// Requests an attestation document binding `public_key`, `nonce` and `user_data`.
+    pub fn attestation(
+        &self,
+        public_key: &[u8],
+        nonce: Option<&[u8]>,
+        user_data: Option<&[u8]>,
+    ) -> Result<Vec<u8>, NsmError> {
+        if public_key.len() != PUBLIC_KEY_LEN {
+            return Err(NsmError::InvalidRequest(format!(
+                "public key must be {PUBLIC_KEY_LEN} bytes, got {}",
+                public_key.len()
+            )));
+        }
+
+        let request = encode_attestation_request(public_key, nonce, user_data)?;
+        let response = self.transact(&request)?;
+        decode_attestation_response(&response)
+    }
+
+    /// Returns `len` bytes from the NSM random number generator.
+    pub fn random(&self, len: usize) -> Result<Vec<u8>, NsmError> {
+        let request = encode_get_random_request()?;
+        let mut output = Vec::with_capacity(len);
+        while output.len() < len {
+            let response = self.transact(&request)?;
+            let chunk = decode_get_random_response(&response)?;
+            if chunk.is_empty() {
+                return Err(NsmError::MalformedResponse(
+                    "NSM returned empty random response".to_owned(),
+                ));
+            }
+            output.extend_from_slice(&chunk);
+        }
+        output.truncate(len);
+        Ok(output)
+    }
+
+    fn transact(&self, request: &[u8]) -> Result<Vec<u8>, NsmError> {
+        if request.len() > NSM_REQUEST_MAX_SIZE {
+            return Err(NsmError::InvalidRequest(format!(
+                "NSM request too large: {} > {NSM_REQUEST_MAX_SIZE}",
+                request.len()
+            )));
+        }
+
+        let device = self.device.lock().unwrap_or_else(PoisonError::into_inner);
         let mut response = vec![0u8; NSM_RESPONSE_MAX_SIZE];
         let mut request = request.to_vec();
         let mut message = NsmMessage {
@@ -104,7 +147,6 @@ impl NsmAttestor {
         };
 
         // SAFETY: `message` points to live request/response buffers for the duration of the ioctl.
-        // The ioctl number and layout match the AWS Nitro Enclaves NSM API on x86_64.
         let result = unsafe {
             libc::ioctl(
                 device.as_raw_fd(),
@@ -113,11 +155,11 @@ impl NsmAttestor {
             )
         };
         if result < 0 {
-            return Err(AttestationError::Io(io::Error::last_os_error()));
+            return Err(NsmError::Io(io::Error::last_os_error()));
         }
 
         if message.response.len > response.len() {
-            return Err(AttestationError::MalformedResponse(format!(
+            return Err(NsmError::MalformedResponse(format!(
                 "NSM response length {} exceeds buffer {}",
                 message.response.len,
                 response.len()
@@ -128,60 +170,29 @@ impl NsmAttestor {
     }
 }
 
-impl Attestor for NsmAttestor {
-    fn attest(&self, request: AttestationRequest) -> Result<Vec<u8>, AttestationError> {
-        if request.public_key.len() != 32 {
-            return Err(AttestationError::InvalidRequest(format!(
-                "public key must be 32 bytes, got {}",
-                request.public_key.len()
-            )));
-        }
-
-        let request = encode_attestation_request(&request)?;
-        let response = self.transact(&request)?;
-        decode_attestation_response(&response)
-    }
-
-    fn random(&self, len: usize) -> Result<Vec<u8>, AttestationError> {
-        let mut output = Vec::with_capacity(len);
-        while output.len() < len {
-            let request = encode_get_random_request()?;
-            let response = self.transact(&request)?;
-            let chunk = decode_get_random_response(&response)?;
-            if chunk.is_empty() {
-                return Err(AttestationError::MalformedResponse(
-                    "NSM returned empty random response".to_owned(),
-                ));
-            }
-            output.extend_from_slice(&chunk);
-        }
-        output.truncate(len);
-        Ok(output)
-    }
-}
-
-fn encode_attestation_request(request: &AttestationRequest) -> Result<Vec<u8>, AttestationError> {
+fn encode_attestation_request(
+    public_key: &[u8],
+    nonce: Option<&[u8]>,
+    user_data: Option<&[u8]>,
+) -> Result<Vec<u8>, NsmError> {
     let value = Value::Map(vec![(
         Value::Text("Attestation".to_owned()),
         Value::Map(vec![
             (
                 Value::Text("user_data".to_owned()),
-                optional_bytes(request.user_data.as_deref()),
+                optional_bytes(user_data),
             ),
-            (
-                Value::Text("nonce".to_owned()),
-                optional_bytes(request.nonce.as_deref()),
-            ),
+            (Value::Text("nonce".to_owned()), optional_bytes(nonce)),
             (
                 Value::Text("public_key".to_owned()),
-                Value::Bytes(request.public_key.clone()),
+                Value::Bytes(public_key.to_vec()),
             ),
         ]),
     )]);
     encode_value(&value)
 }
 
-fn encode_get_random_request() -> Result<Vec<u8>, AttestationError> {
+fn encode_get_random_request() -> Result<Vec<u8>, NsmError> {
     encode_value(&Value::Text("GetRandom".to_owned()))
 }
 
@@ -192,33 +203,32 @@ fn optional_bytes(value: Option<&[u8]>) -> Value {
     }
 }
 
-fn encode_value(value: &Value) -> Result<Vec<u8>, AttestationError> {
+fn encode_value(value: &Value) -> Result<Vec<u8>, NsmError> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(value, &mut bytes)
-        .map_err(|error| AttestationError::Backend(error.to_string()))?;
+        .map_err(|error| NsmError::InvalidRequest(error.to_string()))?;
     Ok(bytes)
 }
 
-fn decode_value(bytes: &[u8]) -> Result<Value, AttestationError> {
-    ciborium::de::from_reader(bytes)
-        .map_err(|error| AttestationError::MalformedResponse(error.to_string()))
+fn decode_value(bytes: &[u8]) -> Result<Value, NsmError> {
+    ciborium::de::from_reader(bytes).map_err(|error| NsmError::MalformedResponse(error.to_string()))
 }
 
-fn decode_attestation_response(bytes: &[u8]) -> Result<Vec<u8>, AttestationError> {
+fn decode_attestation_response(bytes: &[u8]) -> Result<Vec<u8>, NsmError> {
     match decode_nsm_response(bytes)? {
         NsmResponse::Attestation { document } => Ok(document),
-        NsmResponse::Error(error) => Err(AttestationError::Backend(error)),
-        other => Err(AttestationError::MalformedResponse(format!(
+        NsmResponse::Error(error) => Err(NsmError::Device(error)),
+        other => Err(NsmError::MalformedResponse(format!(
             "expected Attestation response, got {other:?}"
         ))),
     }
 }
 
-fn decode_get_random_response(bytes: &[u8]) -> Result<Vec<u8>, AttestationError> {
+fn decode_get_random_response(bytes: &[u8]) -> Result<Vec<u8>, NsmError> {
     match decode_nsm_response(bytes)? {
         NsmResponse::GetRandom { random } => Ok(random),
-        NsmResponse::Error(error) => Err(AttestationError::Backend(error)),
-        other => Err(AttestationError::MalformedResponse(format!(
+        NsmResponse::Error(error) => Err(NsmError::Device(error)),
+        other => Err(NsmError::MalformedResponse(format!(
             "expected GetRandom response, got {other:?}"
         ))),
     }
@@ -231,10 +241,10 @@ enum NsmResponse {
     Error(String),
 }
 
-fn decode_nsm_response(bytes: &[u8]) -> Result<NsmResponse, AttestationError> {
+fn decode_nsm_response(bytes: &[u8]) -> Result<NsmResponse, NsmError> {
     let value = decode_value(bytes)?;
     let Value::Map(entries) = value else {
-        return Err(AttestationError::MalformedResponse(
+        return Err(NsmError::MalformedResponse(
             "NSM response must be a map".to_owned(),
         ));
     };
@@ -244,27 +254,26 @@ fn decode_nsm_response(bytes: &[u8]) -> Result<NsmResponse, AttestationError> {
         let document = map_get(inner, "document")
             .and_then(as_bytes)
             .ok_or_else(|| {
-                AttestationError::MalformedResponse("missing attestation document".to_owned())
+                NsmError::MalformedResponse("missing attestation document".to_owned())
             })?;
         return Ok(NsmResponse::Attestation { document });
     }
 
     if let Some(value) = map_get(&entries, "GetRandom") {
         let inner = as_map(value)?;
-        let random = map_get(inner, "random").and_then(as_bytes).ok_or_else(|| {
-            AttestationError::MalformedResponse("missing random bytes".to_owned())
-        })?;
+        let random = map_get(inner, "random")
+            .and_then(as_bytes)
+            .ok_or_else(|| NsmError::MalformedResponse("missing random bytes".to_owned()))?;
         return Ok(NsmResponse::GetRandom { random });
     }
 
     if let Some(value) = map_get(&entries, "Error") {
-        let error = as_text(value).ok_or_else(|| {
-            AttestationError::MalformedResponse("NSM error must be text".to_owned())
-        })?;
+        let error = as_text(value)
+            .ok_or_else(|| NsmError::MalformedResponse("NSM error must be text".to_owned()))?;
         return Ok(NsmResponse::Error(error));
     }
 
-    Err(AttestationError::MalformedResponse(
+    Err(NsmError::MalformedResponse(
         "unknown NSM response shape".to_owned(),
     ))
 }
@@ -279,12 +288,10 @@ fn map_get<'a>(entries: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
     })
 }
 
-fn as_map(value: &Value) -> Result<&[(Value, Value)], AttestationError> {
+fn as_map(value: &Value) -> Result<&[(Value, Value)], NsmError> {
     match value {
         Value::Map(entries) => Ok(entries),
-        _ => Err(AttestationError::MalformedResponse(
-            "expected CBOR map".to_owned(),
-        )),
+        _ => Err(NsmError::MalformedResponse("expected CBOR map".to_owned())),
     }
 }
 
@@ -319,12 +326,7 @@ mod tests {
 
     #[test]
     fn encodes_attestation_request_as_externally_tagged_map() {
-        let request = AttestationRequest {
-            public_key: vec![0x11; 32],
-            nonce: Some(vec![0x22; 4]),
-            user_data: None,
-        };
-        let bytes = encode_attestation_request(&request).unwrap();
+        let bytes = encode_attestation_request(&[0x11; 32], Some(&[0x22; 4]), None).unwrap();
         let value = decode_value(&bytes).unwrap();
         let Value::Map(outer) = value else {
             panic!("expected outer map");
@@ -376,22 +378,35 @@ mod tests {
     }
 
     #[test]
-    fn decodes_error_response_as_backend_error() {
+    fn decodes_error_response_as_device_error() {
         let response = encode_response(Value::Map(vec![(
             Value::Text("Error".to_owned()),
             Value::Text("InvalidArgument".to_owned()),
         )]));
 
         let error = decode_attestation_response(&response).unwrap_err();
-        assert!(error.to_string().contains("InvalidArgument"));
+        assert!(matches!(error, NsmError::Device(message) if message == "InvalidArgument"));
+    }
+
+    #[test]
+    fn open_missing_device_is_unavailable() {
+        let error = Nsm::open_path("/no/such/nsm").unwrap_err();
+        assert!(
+            matches!(error, NsmError::Unavailable { ref path, .. } if path == Path::new("/no/such/nsm"))
+        );
     }
 
     #[test]
     fn rejects_wrong_public_key_length() {
-        let attestor = NsmAttestor::new("/no/such/device");
-        let error = attestor
-            .attest(AttestationRequest::new(vec![0u8; 31]))
-            .unwrap_err();
+        let nsm = Nsm::open_path("/dev/null").unwrap();
+        let error = nsm.attestation(&[0u8; 31], None, None).unwrap_err();
+        assert!(matches!(error, NsmError::InvalidRequest(_)));
         assert!(error.to_string().contains("public key must be 32 bytes"));
+    }
+
+    #[test]
+    fn ioctl_on_non_nsm_device_is_io_error() {
+        let nsm = Nsm::open_path("/dev/null").unwrap();
+        assert!(matches!(nsm.random(32).unwrap_err(), NsmError::Io(_)));
     }
 }

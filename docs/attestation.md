@@ -9,9 +9,9 @@ The intended verifier flow is:
 3. Confirm the attestation document contains the app public key.
 4. Accept `/process_data` signatures from that public key.
 
-The `nautilus` crate exposes the `Attestor` trait. The `nautilus-nsm` crate implements it by calling `/dev/nsm`.
+The `nautilus` crate exposes the `Attestor` trait and implements it for `/dev/nsm` as `NsmAttestor`, on top of the standalone `nautilus-nsm` driver.
 
-Tests and local examples use `FakeAttestor`, which makes route behavior testable without Nitro hardware.
+Tests and local examples use `FakeAttestor` behind the `test-utils` feature, which makes route behavior testable without Nitro hardware.
 
 ## Kagi
 
@@ -25,15 +25,13 @@ See [kagi.md](kagi.md).
 
 ## Nitro Runtime
 
-Use `nautilus_nsm::NsmAttestor` inside the enclave:
+Create the context inside the enclave with:
 
 ```rust
-use nautilus_nsm::NsmAttestor;
-
-let ctx = NsmAttestor::default().into_context()?;
+let ctx = nautilus::NautilusContext::from_runtime()?;
 ```
 
-`into_context` generates the enclave signing identity from OS randomness mixed with NSM entropy. The resulting Ed25519 public key is included in NSM attestation requests so verifiers can bind signed application responses to the attested enclave.
+`from_runtime` fails if `/dev/nsm` cannot be opened and never falls back to a development identity. It generates the enclave signing identity from OS randomness mixed with NSM entropy. The resulting Ed25519 public key is included in NSM attestation requests so verifiers can bind signed application responses to the attested enclave.
 
 ## Freshness
 

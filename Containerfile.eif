@@ -67,6 +67,7 @@ RUN ln -sf /usr/lib/gcc/x86_64-linux-musl/13.1.0/libgcc_eh.a /usr/lib/libunwind.
 	&& ln -sf libunwind.so.1 /usr/lib/libunwind.so.8 \
 	&& ln -sf libunwind.so.1 /lib64/libunwind.so \
 	&& ln -sf libunwind.so.1 /lib64/libunwind.so.8
+RUN sh scripts/assert-no-test-utils.sh "$ENCLAVE_PACKAGE" "$TARGET"
 RUN cargo build --locked --release --target "$TARGET" -p "$ENCLAVE_PACKAGE"
 
 WORKDIR /build_cpio

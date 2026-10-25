@@ -44,6 +44,10 @@ struct FakeDocument {
 }
 
 impl Attestor for FakeAttestor {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+
     fn attest(&self, request: AttestationRequest) -> Result<Vec<u8>, AttestationError> {
         self.requests
             .lock()

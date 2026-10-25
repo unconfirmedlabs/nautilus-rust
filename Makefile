@@ -2,7 +2,7 @@ REGISTRY ?= local
 OUT_DIR ?= out
 ENCLAVE_PACKAGE ?= nautilus-example-hash-attestor
 ENCLAVE_BIN ?= $(ENCLAVE_PACKAGE)
-EIF_INPUTS := Cargo.toml Cargo.lock rust-toolchain.toml Containerfile.eif .dockerignore $(shell find crates examples eif -type f)
+EIF_INPUTS := Cargo.toml Cargo.lock rust-toolchain.toml Containerfile.eif .dockerignore $(shell find crates examples eif scripts -type f)
 
 .DEFAULT_GOAL := eif
 

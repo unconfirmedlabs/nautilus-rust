@@ -5,7 +5,7 @@ Nautilus Rust is a small framework for building application-specific AWS Nitro E
 It provides the reusable enclave pieces that should be common across Nautilus projects:
 
 - an app-facing `nautilus` crate
-- a real Nitro Secure Module provider in `nautilus-nsm`
+- a standalone `/dev/nsm` driver in `nautilus-nsm`
 - per-boot Ed25519 enclave identity
 - Sui address derivation from the enclave public key
 - signed application responses
@@ -50,7 +50,7 @@ The split is deliberate. Nautilus Rust should own code that must be measured ins
 ```text
 crates/
   nautilus/      # app-facing framework crate
-  nautilus-nsm/  # AWS Nitro Secure Module attestation provider
+  nautilus-nsm/  # standalone AWS Nitro Secure Module driver
 examples/
   hello-world/   # minimal signed response service
   hash-attestor/ # hashes uploaded bytes and signs the digest
@@ -77,21 +77,22 @@ It includes:
 - `Attestor`: trait for attestation providers
 - `router`: standard HTTP route scaffold
 - `IntentResponse`: signed BCS payload response helper
-- `testing::FakeAttestor`: deterministic local attestation provider
+- `NsmAttestor`: the `/dev/nsm` attestation provider
+- `NautilusContext::from_runtime()`: production context that requires `/dev/nsm`
+- `testing::FakeAttestor` and `NautilusContext::development()`: local fakes behind the `test-utils` feature
 
 The core crate uses `#![forbid(unsafe_code)]`.
 
 ### `nautilus-nsm`
 
-The Nitro-specific attestation provider.
+The standalone Nitro Secure Module driver. It does not depend on `nautilus`.
 
 It includes:
 
-- `NsmAttestor`
+- `Nsm`, which opens `/dev/nsm` once
 - CBOR request and response encoding for NSM requests
 - `/dev/nsm` ioctl integration
 - NSM-backed random bytes
-- `NsmAttestor::into_context()` for production enclave contexts
 
 This crate contains the hardware-specific unsafe boundary. Keeping it separate makes the reusable app framework easier to test and audit.
 
@@ -101,14 +102,15 @@ Run the full local check suite:
 
 ```shell
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --locked
+cargo test --workspace --all-targets --locked --features test-utils
 ```
 
 Run the hash example locally:
 
 ```shell
-cargo run -p nautilus-example-hash-attestor
+cargo run -p nautilus-example-hash-attestor --features test-utils
 ```
 
 Then call it:
@@ -118,7 +120,7 @@ curl -s http://127.0.0.1:3000/health_check
 curl -s -X POST --data-binary "hello" http://127.0.0.1:3000/process_data
 ```
 
-The examples use `NautilusContext::development()`, which is deterministic and does not require Nitro hardware.
+With `test-utils` the examples use `NautilusContext::development()`, whose key is public and which does not require Nitro hardware. Without it they call `NautilusContext::from_runtime()`, which fails unless `/dev/nsm` exists. `Containerfile.eif` refuses to build an enclave package that enables `nautilus/test-utils`.
 
 ## App Development Pattern
 
@@ -138,7 +140,6 @@ anyhow = "1"
 axum = "0.8"
 hex = "0.4"
 nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust" }
-nautilus-nsm = { git = "https://github.com/unconfirmedlabs/nautilus-rust" }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -169,31 +170,19 @@ async fn process_data(bytes: Bytes, ctx: NautilusContext) -> Result<Output, Naut
 }
 ```
 
-Use the fake context locally:
+Pick the context at compile time. Expose a `test-utils = ["nautilus/test-utils"]` feature in your app crate for local runs; the default build is NSM-backed and fails closed without `/dev/nsm`:
 
 ```rust
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let app = router(NautilusContext::development(), process_data);
-    nautilus::serve("127.0.0.1:3000".parse()?, app).await
-}
-```
-
-Use the real NSM provider in the enclave:
-
-```rust
-use nautilus::router;
-use nautilus_nsm::NsmAttestor;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let ctx = NsmAttestor::default().into_context()?;
+    #[cfg(feature = "test-utils")]
+    let ctx = NautilusContext::development();
+    #[cfg(not(feature = "test-utils"))]
+    let ctx = NautilusContext::from_runtime()?;
     let app = router(ctx, process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await
 }
 ```
-
-In a production project, choose the context from configuration or compile-time feature flags so local tests do not require `/dev/nsm`.
 
 ## Kagi Integration
 
@@ -269,6 +258,7 @@ This repository includes deterministic release-build settings and a generic EIF 
 - Release builds use one codegen unit, full LTO, stripped symbols, and `panic = "abort"`.
 - The core framework crate forbids unsafe code.
 - The NSM unsafe boundary is isolated to `nautilus-nsm`.
+- `scripts/assert-no-test-utils.sh` fails the EIF build if the enclave package enables `nautilus/test-utils`.
 - There are no `build.rs` scripts.
 - CI enforces formatting, clippy, and locked tests.
 - `Containerfile.eif` uses pinned StageX inputs, normalized initramfs timestamps, and `eif_build`.
