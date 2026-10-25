@@ -64,17 +64,17 @@ impl From<AppIntent> for Intent {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 struct Price {
     value: u64,
 }
 
 fn sign_price(ctx: &NautilusContext) -> Result<SignedResponse<Price>, NautilusError> {
-    ctx.sign_intent(AppIntent::Price, &Price { value: 1 })
+    ctx.sign_intent(AppIntent::Price, Price { value: 1 })
 }
 ```
 
-- `sign_intent(intent, &payload)` signs BCS `(intent, now_ms(), payload)` and returns `SignedResponse { response: IntentMessage { intent, timestamp_ms, data }, signature }` with a hex signature. The payload must be `Serialize + Clone`.
+- `sign_intent(intent, payload)` signs BCS `(intent, now_ms(), payload)` and returns `SignedResponse { response: IntentMessage { intent, timestamp_ms, data }, signature }` with a hex signature. It takes the payload by value and moves it into `data`, so the payload needs only `Serialize`.
 - `now_ms()` is Unix milliseconds from the system clock, never lower than a previous call in the process. It is the enclave's claim, not attested time.
 - `intent_message(intent, timestamp_ms, &payload)` returns the exact signed bytes.
 - `sign_intent_at` (feature `test-utils`) takes a fixed timestamp for vectors.

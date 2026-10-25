@@ -7,7 +7,7 @@ use sha2::{Digest as _, Sha256};
 
 const HASH_ATTESTATION_INTENT: Intent = Intent(0);
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 struct HashAttestation {
     digest: ByteVec,
     length: u64,
@@ -24,7 +24,7 @@ fn process_data(
     bytes: Bytes,
     ctx: &NautilusContext,
 ) -> Result<SignedResponse<HashAttestation>, NautilusError> {
-    ctx.sign_intent(HASH_ATTESTATION_INTENT, &hash_attestation(&bytes))
+    ctx.sign_intent(HASH_ATTESTATION_INTENT, hash_attestation(&bytes))
 }
 
 #[tokio::main]

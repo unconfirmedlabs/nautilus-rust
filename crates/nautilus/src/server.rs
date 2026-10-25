@@ -539,14 +539,14 @@ mod tests {
     use super::*;
 
     fn sign_len(bytes: Bytes, ctx: &NautilusContext) -> Result<SignedResponse<u64>, NautilusError> {
-        ctx.sign_intent(Intent(0), &(bytes.len() as u64))
+        ctx.sign_intent(Intent(0), bytes.len() as u64)
     }
 
     fn sign_body(
         bytes: Bytes,
         ctx: &NautilusContext,
     ) -> Result<SignedResponse<Vec<u8>>, NautilusError> {
-        ctx.sign_intent(Intent(0), &bytes.to_vec())
+        ctx.sign_intent(Intent(0), bytes.to_vec())
     }
 
     fn test_context() -> NautilusContext {
@@ -1040,7 +1040,7 @@ mod tests {
     #[tokio::test]
     async fn panicking_blocking_handler_is_internal_error() {
         let app = router(test_context(), ServerConfig::default(), |bytes, ctx| {
-            ctx.sign_intent(Intent(0), &eleventh_byte(&bytes))
+            ctx.sign_intent(Intent(0), eleventh_byte(&bytes))
         })
         .unwrap();
         assert_panic_is_internal_error(app).await;
@@ -1051,7 +1051,7 @@ mod tests {
         let app = router_async(
             test_context(),
             ServerConfig::default(),
-            |bytes, ctx| async move { ctx.sign_intent(Intent(0), &eleventh_byte(&bytes)) },
+            |bytes, ctx| async move { ctx.sign_intent(Intent(0), eleventh_byte(&bytes)) },
         )
         .unwrap();
         assert_panic_is_internal_error(app).await;

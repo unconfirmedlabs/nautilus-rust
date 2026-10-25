@@ -149,14 +149,14 @@ mod tests {
     #[test]
     fn verify_accepts_good_response() {
         let ctx = context();
-        let signed = ctx.sign_intent(Intent(1), &payload()).unwrap();
+        let signed = ctx.sign_intent(Intent(1), payload()).unwrap();
         verify_signed_response(&ctx.public_key(), Intent(1), &signed).unwrap();
     }
 
     #[test]
     fn verify_rejects_wrong_intent() {
         let ctx = context();
-        let signed = ctx.sign_intent(Intent(1), &payload()).unwrap();
+        let signed = ctx.sign_intent(Intent(1), payload()).unwrap();
         assert!(verify_signed_response(&ctx.public_key(), Intent(2), &signed).is_err());
 
         let mut relabeled = signed;
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn verify_rejects_tampered_payload() {
         let ctx = context();
-        let mut signed = ctx.sign_intent(Intent(1), &payload()).unwrap();
+        let mut signed = ctx.sign_intent(Intent(1), payload()).unwrap();
         signed.response.data.amount += 1;
         assert!(verify_signed_response(&ctx.public_key(), Intent(1), &signed).is_err());
     }
@@ -175,14 +175,14 @@ mod tests {
     #[test]
     fn verify_rejects_tampered_timestamp() {
         let ctx = context();
-        let mut signed = ctx.sign_intent(Intent(1), &payload()).unwrap();
+        let mut signed = ctx.sign_intent(Intent(1), payload()).unwrap();
         signed.response.timestamp_ms += 1;
         assert!(verify_signed_response(&ctx.public_key(), Intent(1), &signed).is_err());
     }
 
     #[test]
     fn verify_rejects_wrong_key() {
-        let signed = context().sign_intent(Intent(1), &payload()).unwrap();
+        let signed = context().sign_intent(Intent(1), payload()).unwrap();
         let other = EnclaveIdentity::from_seed([6u8; 32])
             .verifying_key()
             .to_bytes();
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn sign_intent_stamps_current_time() {
-        let signed = context().sign_intent(Intent(1), &payload()).unwrap();
+        let signed = context().sign_intent(Intent(1), payload()).unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -232,7 +232,7 @@ mod tests {
         );
 
         let signed = ctx
-            .sign_intent_at(Intent(0), 1_744_038_900_000, &payload)
+            .sign_intent_at(Intent(0), 1_744_038_900_000, payload)
             .unwrap();
         assert_eq!(
             signed.signature,

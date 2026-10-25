@@ -7,7 +7,7 @@ These vectors pin the byte-level contract between Nautilus Rust and Kagi. Keep t
 Rust payload:
 
 ```rust
-#[derive(Clone, serde::Serialize)]
+#[derive(serde::Serialize)]
 struct WeatherPayload {
     location: String,
     temperature: u64,
@@ -50,7 +50,7 @@ The signature is Ed25519 over `intent_message_hex`, not over the JSON response b
 
 ```rust
 let ctx = NautilusContext::with_signer(EnclaveIdentity::from_seed([5u8; 32]), FakeAttestor::default());
-let signed = ctx.sign_intent_at(Intent(0), 1_744_038_900_000, &payload)?;
+let signed = ctx.sign_intent_at(Intent(0), 1_744_038_900_000, payload)?;
 assert_eq!(signed.signature, "ef241b08b951a8451f9de2a414530856059ace7acbb9ff5c114839dc697252f5685163eef75db9a0ce497533638f1e66e791edcf8790005d2fa0d2c3b0c39909");
 ```
 

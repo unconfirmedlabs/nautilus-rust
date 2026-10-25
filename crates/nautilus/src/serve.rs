@@ -346,7 +346,7 @@ mod tests {
         );
         let app = router_async(ctx, config.clone(), move |bytes, ctx| async move {
             tokio::time::sleep(handler_delay).await;
-            ctx.sign_intent(Intent(0), &(bytes.len() as u64))
+            ctx.sign_intent(Intent(0), bytes.len() as u64)
         })
         .unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

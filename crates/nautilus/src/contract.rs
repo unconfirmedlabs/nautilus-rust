@@ -350,7 +350,7 @@ mod tests {
             blob_id: U256Bytes::from_be_bytes([0x11; 32]),
             digest: ByteVec::from(vec![1, 2, 3]),
         };
-        let signed = ctx.sign_intent(Intent(4), &payload).unwrap();
+        let signed = ctx.sign_intent(Intent(4), payload).unwrap();
         let json = serde_json::to_string(&signed).unwrap();
         let decoded: SignedResponse<BlobPayload> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, signed);

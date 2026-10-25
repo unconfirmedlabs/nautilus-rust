@@ -76,7 +76,7 @@ use sha2::{Digest as _, Sha256};
 
 const HASH_ATTESTATION_INTENT: Intent = Intent(0);
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 struct HashAttestation {
     digest: ByteVec,
     length: u64,
@@ -90,7 +90,7 @@ fn process_data(
         digest: ByteVec::from(Sha256::digest(&bytes).to_vec()),
         length: bytes.len() as u64,
     };
-    ctx.sign_intent(HASH_ATTESTATION_INTENT, &payload)
+    ctx.sign_intent(HASH_ATTESTATION_INTENT, payload)
 }
 
 #[tokio::main]

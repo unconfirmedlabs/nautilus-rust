@@ -76,39 +76,39 @@ impl NautilusContext {
         sui_address(&self.public_key())
     }
 
-    /// Signs `payload` as an intent message stamped with [`now_ms`].
-    pub fn sign_intent<T: Serialize + Clone>(
+    /// Signs `payload` as an intent message stamped with [`now_ms`] and moves it into the response.
+    pub fn sign_intent<T: Serialize>(
         &self,
         intent: impl Into<Intent>,
-        payload: &T,
+        payload: T,
     ) -> Result<SignedResponse<T>, NautilusError> {
         self.sign_message(intent.into(), now_ms()?, payload)
     }
 
     /// Signs `payload` as an intent message with a fixed timestamp.
     #[cfg(any(test, feature = "test-utils"))]
-    pub fn sign_intent_at<T: Serialize + Clone>(
+    pub fn sign_intent_at<T: Serialize>(
         &self,
         intent: impl Into<Intent>,
         timestamp_ms: u64,
-        payload: &T,
+        payload: T,
     ) -> Result<SignedResponse<T>, NautilusError> {
         self.sign_message(intent.into(), timestamp_ms, payload)
     }
 
-    fn sign_message<T: Serialize + Clone>(
+    fn sign_message<T: Serialize>(
         &self,
         intent: Intent,
         timestamp_ms: u64,
-        payload: &T,
+        payload: T,
     ) -> Result<SignedResponse<T>, NautilusError> {
-        let message = intent_message(intent, timestamp_ms, payload)?;
+        let message = intent_message(intent, timestamp_ms, &payload)?;
         Ok(SignedResponse {
             signature: encode_hex(self.signer.sign(&message)?),
             response: IntentMessage {
                 intent,
                 timestamp_ms,
-                data: payload.clone(),
+                data: payload,
             },
         })
     }

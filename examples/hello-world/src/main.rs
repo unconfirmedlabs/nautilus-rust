@@ -4,7 +4,7 @@ use serde::Serialize;
 
 const HELLO_INTENT: Intent = Intent(0);
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 struct Hello {
     message: String,
     input_len: u64,
@@ -21,7 +21,7 @@ fn process_data(
     bytes: Bytes,
     ctx: &NautilusContext,
 ) -> Result<SignedResponse<Hello>, NautilusError> {
-    ctx.sign_intent(HELLO_INTENT, &hello(&bytes))
+    ctx.sign_intent(HELLO_INTENT, hello(&bytes))
 }
 
 #[tokio::main]
