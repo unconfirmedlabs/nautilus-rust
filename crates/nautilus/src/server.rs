@@ -96,10 +96,9 @@ where
 }
 
 /// Serves a router on a TCP address.
-pub async fn serve(addr: SocketAddr, app: Router) -> anyhow::Result<()> {
+pub async fn serve(addr: SocketAddr, app: Router) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
+    axum::serve(listener, app).await
 }
 
 async fn health_check<F>(State(state): State<Arc<ServerState<F>>>) -> Json<HealthCheckBody> {
@@ -188,34 +187,42 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
+    use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
     use http_body_util::BodyExt as _;
     use serde::Serialize;
     use tower::ServiceExt as _;
 
     use crate::testing::FakeAttestor;
-    use crate::{EnclaveIdentity, NautilusContext};
+    use crate::{
+        EnclaveIdentity, Intent, NautilusContext, SignedResponse, intent_message,
+        verify_signed_response,
+    };
 
     use super::*;
 
-    #[derive(Debug, Serialize)]
-    struct EchoResponse {
-        len: usize,
-        signature: String,
+    async fn sign_len(
+        bytes: Bytes,
+        ctx: NautilusContext,
+    ) -> Result<SignedResponse<u64>, NautilusError> {
+        ctx.sign_intent(Intent(0), &(bytes.len() as u64))
     }
 
-    async fn echo(bytes: Bytes, ctx: NautilusContext) -> Result<EchoResponse, NautilusError> {
-        Ok(EchoResponse {
-            len: bytes.len(),
-            signature: ctx.sign_hex(bytes.as_ref())?,
-        })
+    async fn sign_body(
+        bytes: Bytes,
+        ctx: NautilusContext,
+    ) -> Result<SignedResponse<Vec<u8>>, NautilusError> {
+        ctx.sign_intent(Intent(0), &bytes.to_vec())
+    }
+
+    fn test_context() -> NautilusContext {
+        NautilusContext::new(
+            EnclaveIdentity::from_seed([9u8; 32]),
+            FakeAttestor::default(),
+        )
     }
 
     fn test_app() -> Router {
-        let ctx = NautilusContext::new(
-            EnclaveIdentity::from_seed([9u8; 32]),
-            FakeAttestor::default(),
-        );
-        router_with_config(ctx, ServerConfig { max_body_bytes: 4 }, echo)
+        router_with_config(test_context(), ServerConfig { max_body_bytes: 4 }, sign_len)
     }
 
     async fn response_json(response: Response) -> serde_json::Value {
@@ -295,8 +302,53 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        assert_eq!(json["len"], 3);
+        assert_eq!(json["response"]["intent"], 0);
+        assert_eq!(json["response"]["data"], 3);
         assert_eq!(json["signature"].as_str().unwrap().len(), 128);
+    }
+
+    #[derive(Serialize)]
+    struct WeatherPayload {
+        location: String,
+        temperature: u64,
+    }
+
+    #[tokio::test]
+    async fn posted_intent_message_is_not_signed_as_is() {
+        let ctx = test_context();
+        let forged = intent_message(
+            Intent(0),
+            1_744_038_900_000,
+            &WeatherPayload {
+                location: "San Francisco".to_owned(),
+                temperature: 13,
+            },
+        )
+        .unwrap();
+
+        let response = router(ctx.clone(), sign_body)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/process_data")
+                    .body(Body::from(forged.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let signed: SignedResponse<Vec<u8>> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(signed.response.data, forged);
+
+        let signature: [u8; 64] = hex::decode(&signed.signature).unwrap().try_into().unwrap();
+        let key = VerifyingKey::from_bytes(&ctx.public_key()).unwrap();
+        assert!(
+            key.verify(&forged, &Signature::from_bytes(&signature))
+                .is_err()
+        );
+        verify_signed_response(&ctx.public_key(), Intent(0), &signed).unwrap();
     }
 
     #[tokio::test]

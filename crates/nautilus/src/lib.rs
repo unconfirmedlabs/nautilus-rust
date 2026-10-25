@@ -17,7 +17,9 @@ pub use attestation::{AttestationRequest, Attestor};
 pub use context::NautilusContext;
 pub use crypto::{EnclaveIdentity, PublicKeyBytes, SignatureBytes, Signer};
 pub use error::{AttestationError, NautilusError};
-pub use intent::{IntentResponse, SignedIntent, intent_message};
+pub use intent::{
+    Intent, IntentMessage, SignedResponse, intent_message, now_ms, verify_signed_response,
+};
 pub use nsm::NsmAttestor;
 pub use server::{
     AttestationBody, ErrorBody, HealthCheckBody, ServerConfig, router, router_with_config, serve,

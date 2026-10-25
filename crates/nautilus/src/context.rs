@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use serde::Serialize;
+
 use crate::{
-    AttestationRequest, Attestor, EnclaveIdentity, NautilusError, NsmAttestor, PublicKeyBytes,
-    SignatureBytes, Signer as _, encode_hex,
-    intent::{SignedIntent, sign_bcs_payload},
+    AttestationRequest, Attestor, EnclaveIdentity, Intent, IntentMessage, NautilusError,
+    NsmAttestor, PublicKeyBytes, SignedResponse, Signer as _, encode_hex, intent_message, now_ms,
 };
 
 /// App-facing context passed to business logic.
@@ -59,11 +60,6 @@ impl NautilusContext {
         self.attestor.name()
     }
 
-    /// Returns the underlying identity.
-    pub fn identity(&self) -> &EnclaveIdentity {
-        &self.identity
-    }
-
     /// Returns the public key bytes.
     pub fn public_key(&self) -> PublicKeyBytes {
         self.identity.public_key()
@@ -79,27 +75,41 @@ impl NautilusContext {
         self.identity.sui_address()
     }
 
-    /// Signs raw bytes.
-    pub fn sign(&self, message: &[u8]) -> Result<SignatureBytes, NautilusError> {
-        self.identity.sign(message)
-    }
-
-    /// Signs raw bytes and returns lowercase hex.
-    pub fn sign_hex(&self, message: &[u8]) -> Result<String, NautilusError> {
-        Ok(encode_hex(self.sign(message)?))
-    }
-
-    /// Signs a BCS-serializable payload as a Nautilus intent message.
-    pub fn sign_bcs_payload<T>(
+    /// Signs `payload` as an intent message stamped with [`now_ms`].
+    pub fn sign_intent<T: Serialize + Clone>(
         &self,
-        intent: u8,
+        intent: impl Into<Intent>,
+        payload: &T,
+    ) -> Result<SignedResponse<T>, NautilusError> {
+        self.sign_message(intent.into(), now_ms()?, payload)
+    }
+
+    /// Signs `payload` as an intent message with a fixed timestamp.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn sign_intent_at<T: Serialize + Clone>(
+        &self,
+        intent: impl Into<Intent>,
         timestamp_ms: u64,
-        payload: T,
-    ) -> Result<SignedIntent<T>, NautilusError>
-    where
-        T: serde::Serialize + Clone,
-    {
-        sign_bcs_payload(self, intent, timestamp_ms, payload)
+        payload: &T,
+    ) -> Result<SignedResponse<T>, NautilusError> {
+        self.sign_message(intent.into(), timestamp_ms, payload)
+    }
+
+    fn sign_message<T: Serialize + Clone>(
+        &self,
+        intent: Intent,
+        timestamp_ms: u64,
+        payload: &T,
+    ) -> Result<SignedResponse<T>, NautilusError> {
+        let message = intent_message(intent, timestamp_ms, payload)?;
+        Ok(SignedResponse {
+            signature: encode_hex(self.identity.sign(&message)?),
+            response: IntentMessage {
+                intent,
+                timestamp_ms,
+                data: payload.clone(),
+            },
+        })
     }
 
     /// Requests an attestation document bound to this context's public key.

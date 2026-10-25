@@ -1,22 +1,24 @@
 use axum::body::Bytes;
-use nautilus::{NautilusContext, NautilusError};
+use nautilus::{Intent, NautilusContext, NautilusError, SignedResponse};
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
-struct HelloResponse {
-    message: &'static str,
-    input_len: usize,
-    public_key: String,
-    signature: String,
+const HELLO_INTENT: Intent = Intent(0);
+
+#[derive(Debug, Clone, Serialize)]
+struct Hello {
+    message: String,
+    input_len: u64,
 }
 
-async fn process_data(bytes: Bytes, ctx: NautilusContext) -> Result<HelloResponse, NautilusError> {
-    Ok(HelloResponse {
-        message: "hello from nautilus-rust",
-        input_len: bytes.len(),
-        public_key: ctx.public_key_hex(),
-        signature: ctx.sign_hex(bytes.as_ref())?,
-    })
+async fn process_data(
+    bytes: Bytes,
+    ctx: NautilusContext,
+) -> Result<SignedResponse<Hello>, NautilusError> {
+    let hello = Hello {
+        message: "hello from nautilus-rust".to_owned(),
+        input_len: bytes.len() as u64,
+    };
+    ctx.sign_intent(HELLO_INTENT, &hello)
 }
 
 #[tokio::main]
@@ -27,5 +29,6 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
     let app = nautilus::router(ctx, process_data);
-    nautilus::serve("127.0.0.1:3000".parse()?, app).await
+    nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
+    Ok(())
 }

@@ -35,6 +35,9 @@ pub enum NautilusError {
     /// BCS serialization failed.
     #[error("BCS serialization failed: {0}")]
     Bcs(String),
+    /// The system clock is unusable.
+    #[error("clock error: {0}")]
+    Clock(String),
     /// User application logic failed.
     #[error("application error: {0}")]
     Application(String),
@@ -44,11 +47,5 @@ impl NautilusError {
     /// Creates an application error with a stable user-facing message.
     pub fn application(message: impl Into<String>) -> Self {
         Self::Application(message.into())
-    }
-}
-
-impl From<anyhow::Error> for NautilusError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Application(error.to_string())
     }
 }

@@ -82,10 +82,7 @@ impl EnclaveIdentity {
 
     /// Verifies a signature against this identity's public key.
     pub fn verify(&self, message: &[u8], signature: &SignatureBytes) -> Result<(), NautilusError> {
-        let signature = Signature::from_bytes(signature);
-        self.verifying_key()
-            .verify(message, &signature)
-            .map_err(|error| NautilusError::Crypto(error.to_string()))
+        verify_ed25519(&self.public_key(), message, signature)
     }
 }
 
@@ -97,6 +94,16 @@ impl Signer for EnclaveIdentity {
     fn sign(&self, message: &[u8]) -> Result<SignatureBytes, NautilusError> {
         Ok(self.signing_key.sign(message).to_bytes())
     }
+}
+
+pub(crate) fn verify_ed25519(
+    public_key: &PublicKeyBytes,
+    message: &[u8],
+    signature: &SignatureBytes,
+) -> Result<(), NautilusError> {
+    VerifyingKey::from_bytes(public_key)
+        .and_then(|key| key.verify(message, &Signature::from_bytes(signature)))
+        .map_err(|error| NautilusError::Crypto(error.to_string()))
 }
 
 /// Derives a Sui address from an Ed25519 public key.

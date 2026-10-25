@@ -26,7 +26,7 @@ The projects should stay separate. `nautilus-rust` should not vendor Move module
 2. Create a Kagi `EnclavePolicy<T>` with the expected PCR0, PCR1, and PCR2 values.
 3. Boot the enclave and request a Nitro attestation document from the Nautilus Rust app.
 4. Load that document with Sui's `nitro_attestation::load_nitro_attestation` and pass it to Kagi. Kagi validates the document against the policy and stores the attested public key in an `Enclave<T>`.
-5. Have the Nautilus Rust app sign response payloads with `NautilusContext::sign_bcs_payload`.
+5. Have the Nautilus Rust app sign response payloads with `NautilusContext::sign_intent`.
 6. Have Move code call Kagi's `verify_signature` before consuming the response.
 
 ## Signing Compatibility
@@ -44,7 +44,7 @@ public struct IntentMessage<T: drop> has copy, drop {
 Nautilus Rust signs the same byte layout:
 
 ```rust
-let signed = ctx.sign_bcs_payload(intent, timestamp_ms, payload)?;
+let signed = ctx.sign_intent(Intent(0), &payload)?;
 ```
 
 The Rust golden vector in `crates/nautilus/src/intent.rs` is intentionally aligned with Kagi's Move `test_serde` vector. Keep those tests in sync whenever the intent-message layout changes.

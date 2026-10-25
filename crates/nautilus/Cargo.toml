@@ -12,7 +12,6 @@ version.workspace = true
 test-utils = []
 
 [dependencies]
-anyhow.workspace = true
 axum.workspace = true
 bcs.workspace = true
 blake2.workspace = true

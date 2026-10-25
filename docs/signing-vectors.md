@@ -41,4 +41,4 @@ public_key_hex = 6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf
 signature_hex = ef241b08b951a8451f9de2a414530856059ace7acbb9ff5c114839dc697252f5685163eef75db9a0ce497533638f1e66e791edcf8790005d2fa0d2c3b0c39909
 ```
 
-The signature is Ed25519 over `intent_message_hex`, not over the JSON response body.
+The signature is Ed25519 over `intent_message_hex`, not over the JSON response body. `nautilus::intent_message` returns these bytes, and the vector test signs them with `NautilusContext::sign_intent_at` (feature `test-utils`).

@@ -33,11 +33,13 @@ my-enclave-app/
 
 ## Signed Responses
 
-For responses that will be verified on-chain with Kagi, sign a BCS payload:
+Sign a typed payload under an application-defined intent; the timestamp is the enclave's `now_ms()`:
 
 ```rust
-let signed = ctx.sign_bcs_payload(intent, timestamp_ms, payload)?;
+let signed = ctx.sign_intent(Intent(0), &payload)?;
 ```
+
+Off-chain clients check responses with `nautilus::verify_signed_response`.
 
 The signed bytes match Kagi's Move `IntentMessage<T>` layout. See [signing-vectors.md](signing-vectors.md).
 

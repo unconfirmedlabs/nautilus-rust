@@ -76,7 +76,8 @@ It includes:
 - `EnclaveIdentity`: Ed25519 identity and Sui address helper
 - `Attestor`: trait for attestation providers
 - `router`: standard HTTP route scaffold
-- `IntentResponse`: signed BCS payload response helper
+- `Intent`, `IntentMessage`, `SignedResponse`: domain-separated signing of typed payloads
+- `verify_signed_response`: off-chain verification of signed responses
 - `NsmAttestor`: the `/dev/nsm` attestation provider
 - `NautilusContext::from_runtime()`: production context that requires `/dev/nsm`
 - `testing::FakeAttestor` and `NautilusContext::development()`: local fakes behind the `test-utils` feature
@@ -138,7 +139,6 @@ Depend on the framework:
 [dependencies]
 anyhow = "1"
 axum = "0.8"
-hex = "0.4"
 nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust" }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
@@ -149,24 +149,27 @@ Write application logic as a handler:
 
 ```rust
 use axum::body::Bytes;
-use nautilus::{NautilusContext, NautilusError, router};
+use nautilus::{Intent, NautilusContext, NautilusError, SignedResponse, router};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
-#[derive(Serialize)]
-struct Output {
-    digest: String,
-    signature: String,
+const HASH_ATTESTATION_INTENT: Intent = Intent(0);
+
+#[derive(Clone, Serialize)]
+struct HashAttestation {
+    digest: Vec<u8>,
+    length: u64,
 }
 
-async fn process_data(bytes: Bytes, ctx: NautilusContext) -> Result<Output, NautilusError> {
-    let digest = Sha256::digest(bytes.as_ref());
-    let signature = ctx.sign_hex(&digest)?;
-
-    Ok(Output {
-        digest: hex::encode(digest),
-        signature,
-    })
+async fn process_data(
+    bytes: Bytes,
+    ctx: NautilusContext,
+) -> Result<SignedResponse<HashAttestation>, NautilusError> {
+    let attestation = HashAttestation {
+        digest: Sha256::digest(bytes.as_ref()).to_vec(),
+        length: bytes.len() as u64,
+    };
+    ctx.sign_intent(HASH_ATTESTATION_INTENT, &attestation)
 }
 ```
 
@@ -180,7 +183,8 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
     let app = router(ctx, process_data);
-    nautilus::serve("127.0.0.1:3000".parse()?, app).await
+    nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
+    Ok(())
 }
 ```
 
@@ -193,7 +197,7 @@ The intended split is:
 - `nautilus-rust`: enclave identity, attestation request, and signed response generation
 - `kagi`: PCR policy, attestation-document validation, enclave registration, and Ed25519 verification on-chain
 
-The signing contract is a BCS intent message containing `intent: u8`, `timestamp_ms: u64`, and the app payload. `NautilusContext::sign_bcs_payload` signs the same layout Kagi verifies in Move.
+The signing contract is a BCS intent message containing `intent: u8`, `timestamp_ms: u64`, and the app payload. `NautilusContext::sign_intent` stamps the enclave time and signs the same layout Kagi verifies in Move. There is no API for signing raw bytes.
 
 See [docs/kagi.md](docs/kagi.md) and [docs/signing-vectors.md](docs/signing-vectors.md).
 

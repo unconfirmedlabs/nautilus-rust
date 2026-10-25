@@ -14,7 +14,6 @@ test-utils = ["nautilus/test-utils"]
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-hex.workspace = true
 nautilus = { path = "../../crates/nautilus" }
 serde.workspace = true
 sha2.workspace = true
