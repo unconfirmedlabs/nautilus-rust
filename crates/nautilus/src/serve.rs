@@ -67,6 +67,7 @@ where
     let mut http = http1::Builder::new();
     http.timer(TokioTimer::new())
         .header_read_timeout(config.header_read_timeout)
+        .half_close(true)
         .keep_alive(true);
     let graceful = GracefulShutdown::new();
     let mut shutdown = pin!(shutdown);
@@ -432,6 +433,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn half_closed_client_gets_the_response() {
+        let running = start(ServerConfig::default(), Duration::from_millis(50)).await;
+        let mut stream = TcpStream::connect(running.addr).await.unwrap();
+        stream.write_all(REQUEST).await.unwrap();
+        stream.shutdown().await.unwrap();
+        let response = read_until_closed(&mut stream).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+
+    #[tokio::test]
     async fn slow_handler_outlives_the_idle_deadline() {
         let running = start(
             ServerConfig {
@@ -498,69 +509,173 @@ mod tests {
     }
 
     #[cfg(feature = "vsock")]
-    #[tokio::test]
-    async fn serves_over_vsock_loopback() {
+    mod vsock {
+        use tokio::io::AsyncWriteExt;
         use tokio_vsock::{VMADDR_CID_LOCAL, VsockAddr, VsockStream};
 
-        let port = 40_000 + std::process::id() % 20_000;
-        let listener = match VsockListener::bind(port) {
-            Ok(listener) => listener,
-            Err(error) => {
-                eprintln!("skipping: cannot bind AF_VSOCK ({error}); load vsock_loopback to run");
-                return;
-            }
-        };
-        let ctx = NautilusContext::with_signer(
-            EnclaveIdentity::from_seed([9u8; 32]),
-            FakeAttestor::default(),
-        );
-        let config = ServerConfig {
-            max_connections: 1,
-            ..ServerConfig::default()
-        };
-        let app = router_async(ctx, config.clone(), |bytes, ctx| async move {
-            ctx.sign_intent(Intent(0), &(bytes.len() as u64))
-        })
-        .unwrap();
-        let (shutdown, shutdown_rx) = oneshot::channel::<()>();
-        let server = tokio::spawn(serve_with_shutdown(listener, app, config, async {
-            let _ = shutdown_rx.await;
-        }));
+        use super::*;
 
-        let addr = VsockAddr::new(VMADDR_CID_LOCAL, port);
-        let mut stream = match VsockStream::connect(addr).await {
-            Ok(stream) => stream,
-            Err(error) => {
+        const BIG_LEN: usize = 1024 * 1024;
+
+        struct VsockServer {
+            addr: VsockAddr,
+            shutdown: oneshot::Sender<()>,
+            server: JoinHandle<io::Result<()>>,
+        }
+
+        impl VsockServer {
+            async fn stop(self) {
+                self.shutdown.send(()).unwrap();
+                timeout(Duration::from_secs(5), self.server)
+                    .await
+                    .expect("server did not stop")
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+
+        async fn start(offset: u32, config: ServerConfig) -> Option<VsockServer> {
+            let port = 40_000 + (std::process::id() % 5_000) * 4 + offset;
+            let listener = match VsockListener::bind(port) {
+                Ok(listener) => listener,
+                Err(error) => {
+                    eprintln!(
+                        "skipping: cannot bind AF_VSOCK ({error}); load vsock_loopback to run"
+                    );
+                    return None;
+                }
+            };
+            let ctx = NautilusContext::with_signer(
+                EnclaveIdentity::from_seed([9u8; 32]),
+                FakeAttestor::default(),
+            );
+            let app = router_async(ctx, config.clone(), |bytes, _ctx| async move {
+                Ok(if &bytes[..] == b"big" {
+                    "x".repeat(BIG_LEN)
+                } else {
+                    bytes.len().to_string()
+                })
+            })
+            .unwrap();
+            let (shutdown, shutdown_rx) = oneshot::channel::<()>();
+            let server = tokio::spawn(serve_with_shutdown(listener, app, config, async {
+                let _ = shutdown_rx.await;
+            }));
+            let addr = VsockAddr::new(VMADDR_CID_LOCAL, port);
+            if let Err(error) = VsockStream::connect(addr).await {
                 eprintln!(
                     "skipping: cannot connect to VMADDR_CID_LOCAL ({error}); load vsock_loopback to run"
                 );
-                return;
+                return None;
             }
-        };
-        stream
-            .write_all(b"POST /process_data HTTP/1.1\r\n")
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+            Some(VsockServer {
+                addr,
+                shutdown,
+                server,
+            })
+        }
 
-        let mut refused = VsockStream::connect(addr).await.unwrap();
-        let mut buf = [0u8; 64];
-        let read = timeout(Duration::from_secs(5), refused.read(&mut buf)).await;
-        assert!(matches!(read, Ok(Ok(0) | Err(_))), "{read:?}");
+        fn request(body: &str) -> String {
+            format!(
+                "POST /process_data HTTP/1.1\r\nhost: localhost\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
 
-        stream
-            .write_all(b"host: localhost\r\ncontent-length: 3\r\nconnection: close\r\n\r\nabc")
-            .await
-            .unwrap();
-        let mut response = String::new();
-        timeout(Duration::from_secs(5), stream.read_to_string(&mut response))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        async fn exchange(addr: VsockAddr, body: &str, half_close: bool) -> String {
+            let mut stream = VsockStream::connect(addr).await.unwrap();
+            stream.write_all(request(body).as_bytes()).await.unwrap();
+            if half_close {
+                AsyncWriteExt::shutdown(&mut stream).await.unwrap();
+            }
+            let mut response = Vec::new();
+            timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+                .await
+                .expect("response timed out")
+                .unwrap();
+            String::from_utf8(response).unwrap()
+        }
 
-        shutdown.send(()).unwrap();
-        server.await.unwrap().unwrap();
+        #[tokio::test]
+        async fn serves_and_caps_connections() {
+            let config = ServerConfig {
+                max_connections: 1,
+                ..ServerConfig::default()
+            };
+            let Some(server) = start(0, config).await else {
+                return;
+            };
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut held = VsockStream::connect(server.addr).await.unwrap();
+            held.write_all(b"POST /process_data HTTP/1.1\r\n")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let mut refused = VsockStream::connect(server.addr).await.unwrap();
+            let mut buf = [0u8; 64];
+            let read = timeout(Duration::from_secs(5), refused.read(&mut buf)).await;
+            assert!(matches!(read, Ok(Ok(0) | Err(_))), "{read:?}");
+
+            held.write_all(b"host: localhost\r\ncontent-length: 3\r\nconnection: close\r\n\r\nabc")
+                .await
+                .unwrap();
+            let mut response = String::new();
+            timeout(Duration::from_secs(5), held.read_to_string(&mut response))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            assert!(response.ends_with("\"3\""), "{response}");
+            server.stop().await;
+        }
+
+        #[tokio::test]
+        async fn rapid_sequential_connections_all_succeed() {
+            let Some(server) = start(1, ServerConfig::default()).await else {
+                return;
+            };
+            for index in 0..500 {
+                let response = exchange(server.addr, "abc", false).await;
+                assert!(
+                    response.starts_with("HTTP/1.1 200") && response.ends_with("\"3\""),
+                    "request {index}: {response}"
+                );
+            }
+            server.stop().await;
+        }
+
+        #[tokio::test]
+        async fn half_closed_client_gets_the_full_response() {
+            let Some(server) = start(2, ServerConfig::default()).await else {
+                return;
+            };
+            for _ in 0..20 {
+                let response = exchange(server.addr, "abcd", true).await;
+                assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+                assert!(response.ends_with("\"4\""), "{response}");
+            }
+            server.stop().await;
+        }
+
+        #[tokio::test]
+        async fn large_response_arrives_intact() {
+            let Some(server) = start(3, ServerConfig::default()).await else {
+                return;
+            };
+            for half_close in [false, true] {
+                let response = exchange(server.addr, "big", half_close).await;
+                let (head, body) = response.split_once("\r\n\r\n").unwrap();
+                assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+                assert!(
+                    head.contains(&format!("content-length: {}", BIG_LEN + 2)),
+                    "{head}"
+                );
+                assert_eq!(body.len(), BIG_LEN + 2);
+                assert_eq!(body, format!("\"{}\"", "x".repeat(BIG_LEN)));
+            }
+            server.stop().await;
+        }
     }
 
     #[tokio::test]
