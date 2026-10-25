@@ -6,10 +6,7 @@ The reproducibility target is the EIF measurement (PCR0, PCR1, PCR2), not the Ru
 
 - `rust-toolchain.toml` pins Rust 1.94.1 for local and CI builds; `Cargo.lock` is committed and every build uses `--locked`.
 - Release profile: `codegen-units = 1`, `lto = "fat"`, stripped symbols, and the default `panic = "unwind"`. No crate has a `build.rs`.
-- `Containerfile.eif` pins every StageX image by digest. The pins currently mix two StageX releases:
-  - `sx2026.03.0`: `core-rust` (Rust 1.94.0), `core-libunwind`, `core-libcxx`, `core-libcxxabi`;
-  - `sx2025.08.0`: musl, busybox, gcc, llvm, openssl, ca-certificates, eif_build, nit and the Nitro kernel.
-  The `libunwind` symlinks in the build stage bridge the two. Re-pinning to one release is pending. Keep `workspace.package.rust-version` compatible with the image's Rust before publishing PCRs.
+- `Containerfile.eif` pins every StageX image by the digest of its `linux/amd64` manifest, all from release `sx2026.03.0`: `core-rust` is Rust 1.94.0 and `core-gcc` is GCC 15.2.0. To re-pin, take each image's `sx<release>` tag index from Docker Hub and use the `linux/amd64` entry, not the index digest. `core-libunwind` ships only `libunwind.so.1`, so the build stage symlinks the `libunwind` names the Rust toolchain links against, including `libunwind.a` to GCC's `libgcc_eh.a`; update that path when `core-gcc` changes version. Keep `workspace.package.rust-version` compatible with the image's Rust before publishing PCRs.
 - Crates are fetched from the network during the image build; they are not vendored.
 
 ## Test-Utils Guard

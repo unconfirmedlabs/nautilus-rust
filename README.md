@@ -162,7 +162,7 @@ Enclaves have no network; the only I/O is vsock to the parent instance. With the
 - `rust-toolchain.toml` pins Rust 1.94.1; `Cargo.lock` is committed and CI uses `--locked`.
 - Release builds use one codegen unit, fat LTO and stripped symbols, and unwind on panic so a panicking handler returns 500 instead of ending the enclave. No crate has a `build.rs`.
 - `Containerfile.eif` pins StageX images by digest, builds for `x86_64-unknown-linux-musl`, normalizes initramfs timestamps and runs `eif_build`. `make eif` writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
-- The StageX pins currently mix two releases: `core-rust` 1.94.0, `core-libunwind`, `core-libcxx` and `core-libcxxabi` are `sx2026.03.0`; musl, busybox, gcc, llvm, openssl, ca-certificates, eif_build, nit and the Nitro kernel are `sx2025.08.0`. Re-pinning to one release is pending.
+- Every StageX image is pinned to its `linux/amd64` manifest from release `sx2026.03.0` (`core-rust` is Rust 1.94.0, `core-gcc` is GCC 15.2.0).
 
 The reproducibility target is the EIF measurement (PCRs), not the Rust binary hash. See [docs/reproducible-builds.md](docs/reproducible-builds.md).
 

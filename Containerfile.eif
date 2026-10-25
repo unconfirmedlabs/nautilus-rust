@@ -3,27 +3,27 @@
 # source-bootstrapped build inputs, normalized initramfs timestamps, and explicit
 # PCR output.
 
-FROM stagex/core-binutils@sha256:f2d3bf6104db0d5ac39ca155c0241bfea2516a6829e3b4fd657cf9ba5b625478 AS core-binutils
-FROM stagex/core-ca-certificates@sha256:d135f1189e9b232eb7316626bf7858534c5540b2fc53dced80a4c9a95f26493e AS core-ca-certificates
-FROM stagex/core-gcc@sha256:964ffd3793c5a38ca581e9faefd19918c259f1611c4cbf5dc8be612e3a8b72f5 AS core-gcc
-FROM stagex/core-git@sha256:6b3e0055f6aeaa8465f207a871db2c63a939cd7406113e9d769ff3b37239f3d0 AS core-git
-FROM stagex/core-zlib@sha256:06f5168e20d85d1eb1d19836cdf96addc069769b40f8f0f4a7a70b2f49fc18f8 AS core-zlib
-FROM stagex/core-libffi@sha256:64d087343541401271cf9fec6b7bd788040c72a16918748ae36c171e53e94002 AS core-libffi
-FROM stagex/core-llvm@sha256:583ecda677f51b69857f8027dfc58f4a931d1adc4d16214870a373505210d973 AS core-llvm
+FROM stagex/core-binutils@sha256:9fedf2687ad85efab8da71417bfbe78659db5295ee4e288df3a04315e3b687ac AS core-binutils
+FROM stagex/core-ca-certificates@sha256:4d901fb99baee5f461ede66e37edf2505d9d367222feded99e80892b1940f710 AS core-ca-certificates
+FROM stagex/core-gcc@sha256:0e382ec440f4e858d8156088196f588fa935b689bfde4130d7cc6bed74c6fc10 AS core-gcc
+FROM stagex/core-git@sha256:e87793fb81c2d9f24784a5674a2c0160fae0d823b17d7fafb5e69846a71730e5 AS core-git
+FROM stagex/core-zlib@sha256:130afab57ac8e9a9eb1e0c6e2c91758a67f731634d3cdb45ae04ea0534cc3930 AS core-zlib
+FROM stagex/core-libffi@sha256:c1efa10f13e4a416353b958d82b4e268aa04c723c66cb6a17006df0f4c4134aa AS core-libffi
+FROM stagex/core-llvm@sha256:828af54c098f1b302bfe73b02e71d5fcf363fe9ff31ea0e51ffb43689d77c6f3 AS core-llvm
 FROM stagex/core-libcxx@sha256:733ddf3bf6a47ba39578bec31d30804db134fa72482e8dbf4fcf288788d8a5b4 AS core-libcxx
 FROM stagex/core-libcxxabi@sha256:88e66348a0eb2b1c0a321aaac138aef4ccc4bbd13a16ffd1de0231d5506f66b3 AS core-libcxxabi
-FROM stagex/core-openssl@sha256:d6487f0cb15f4ee02b420c717cb9abd85d73043c0bb3a2c6ce07688b23c1df07 AS core-openssl
+FROM stagex/core-openssl@sha256:decacae13674bebbeaef3ce79c5d1159ae8495f272f8fa7e5db660c84ab37d1d AS core-openssl
 FROM stagex/core-rust@sha256:afd1cad50f1beff37d41d756e4ebf606b7a100119e96d3c1b140fa6b27386034 AS core-rust
-FROM stagex/core-musl@sha256:d9af23284cca2e1002cd53159ada469dfe6d6791814e72d6163c7de18d4ae701 AS core-musl
+FROM stagex/core-musl@sha256:816a6e097544c23386c95c8614e358ace7c5026c3f53b7b9353b84cbb4ed0096 AS core-musl
 FROM stagex/core-libunwind@sha256:c76fcc66148b19230247b7cdba06040dbe2f47aa19d7a4be4d430db15d47e4b8 AS core-libunwind
-FROM stagex/core-pkgconf@sha256:52624a89bb8cc684bc0391fcb7770ded2bbcb281e84bdb68a31fce127439fd7b AS core-pkgconf
-FROM stagex/core-busybox@sha256:637b1e0d9866807fac94c22d6dc4b2e1f45c8a5ca1113c88172e0324a30c7283 AS core-busybox
-FROM stagex/core-libzstd@sha256:5382c221194b6d0690eb65ccca01c720a6bd39f92e610dbc0e99ba43f38f3094 AS core-libzstd
-FROM stagex/user-eif_build@sha256:935032172a23772ea1a35c6334aa98aa7b0c46f9e34a040347c7b2a73496ef8a AS user-eif_build
-FROM stagex/user-gen_initramfs@sha256:a87e9a3fa8468d2e08b5abb0a6da4c7a11df22273e2c526cb22e6b131151def8 AS user-gen_initramfs
-FROM stagex/user-linux-nitro@sha256:aa1006d91a7265b33b86160031daad2fdf54ec2663ed5ccbd312567cc9beff2c AS user-linux-nitro
-FROM stagex/user-cpio@sha256:9c8bf39001eca8a71d5617b46f8c9b4f7426db41a052f198d73400de6f8a16df AS user-cpio
-FROM stagex/user-nit@sha256:60b6eef4534ea6ea78d9f29e4c7feb27407b615424f20ad8943d807191688be7 AS user-nit
+FROM stagex/core-pkgconf@sha256:437751215006901bd9a31720de95fa10e294b585abbfe78436310cec481884e4 AS core-pkgconf
+FROM stagex/core-busybox@sha256:d608daa946e4799cf28b105aba461db00187657bd55ea7c2935ff11dac237e27 AS core-busybox
+FROM stagex/core-libzstd@sha256:dd234de20cd651715ffc67ced1bb06cc3ac3011d881055beda335869d7d4210f AS core-libzstd
+FROM stagex/user-eif_build@sha256:907c8940cabb05462952b8b65ce64d4a6e346da302b3086fa1716f470dbdb0f1 AS user-eif_build
+FROM stagex/user-gen_initramfs@sha256:a83e25487056fef6c20c1861a744340780f4c0ba95a572b5158094fc2637de7a AS user-gen_initramfs
+FROM stagex/user-linux-nitro@sha256:9a5c6d0832ba0bc8c5ed29d5a064d69b2837eee4bf689a7df60947a181aeb6ff AS user-linux-nitro
+FROM stagex/user-cpio@sha256:d0c7abf1f7e8e157c1d86d7c02b5095a65aeb71abf1e4e8886dc57b4e70a71a7 AS user-cpio
+FROM stagex/user-nit@sha256:3d1d534143a4f5612c565c733f2f43985438f5f980f8be98767ba955eae19033 AS user-nit
 
 FROM scratch AS base
 COPY --from=core-busybox . /
@@ -55,13 +55,14 @@ COPY . .
 ENV OPENSSL_STATIC=true
 ENV SOURCE_DATE_EPOCH=0
 ENV TARGET=x86_64-unknown-linux-musl
-ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C target-cpu=x86-64 --remap-path-prefix=/workspace=/workspace"
+ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C target-cpu=x86-64"
 ARG ENCLAVE_PACKAGE=nautilus-example-hash-attestor
 ARG ENCLAVE_BIN=nautilus-example-hash-attestor
 
 # StageX Rust 1.94.0 links build scripts and final musl binaries through
-# libunwind names that are not all present in the runtime layer.
-RUN ln -sf /usr/lib/gcc/x86_64-linux-musl/13.1.0/libgcc_eh.a /usr/lib/libunwind.a \
+# libunwind names that core-libunwind does not ship: it has only
+# libunwind.so.1, and no static archive.
+RUN ln -sf /usr/lib/gcc/x86_64-linux-musl/15.2.0/libgcc_eh.a /usr/lib/libunwind.a \
 	&& ln -sf libunwind.so.1 /usr/lib/libunwind.so \
 	&& ln -sf libunwind.so.1 /usr/lib/libunwind.so.8 \
 	&& ln -sf libunwind.so.1 /lib64/libunwind.so \
@@ -95,6 +96,8 @@ RUN <<-EOF
 	> /build_cpio/rootfs.cpio
 EOF
 
+# initrd= is informational on x86, where the kernel takes the ramdisk from
+# the boot parameters; it is kept accurate rather than copied from a template.
 WORKDIR /build_eif
 RUN eif_build \
 	--kernel /bzImage \
@@ -102,7 +105,7 @@ RUN eif_build \
 	--ramdisk /build_cpio/rootfs.cpio \
 	--pcrs_output /nitro.pcrs \
 	--output /nitro.eif \
-	--cmdline 'reboot=k initrd=0x2000000,3228672 root=/dev/ram0 panic=1 pci=off nomodules console=ttyS0 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd nit.target=/run.sh'
+	--cmdline "reboot=k initrd=0x2000000,$(wc -c < /build_cpio/rootfs.cpio) root=/dev/ram0 panic=1 pci=off nomodules console=ttyS0 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd nit.target=/run.sh"
 
 FROM scratch AS package
 COPY --from=build /nitro.eif .
