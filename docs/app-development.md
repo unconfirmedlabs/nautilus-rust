@@ -109,6 +109,7 @@ It checks the intent, re-encodes the BCS message and verifies Ed25519. Freshness
 | `max_body_bytes` | 8 MiB (`DEFAULT_MAX_BODY_BYTES`) | larger bodies get 413 |
 | `max_concurrent` | available parallelism, or 1 | in-flight `/attestation` + `/process_data`; extra requests get 429 |
 | `request_timeout` | 30 s (`DEFAULT_REQUEST_TIMEOUT`) | slower requests get 408 |
+| `body_read_timeout` | 10 s (`DEFAULT_BODY_READ_TIMEOUT`) | a body that has not fully arrived by then gets 408 |
 | `allow_unnonced_attestation` | false | enables `GET /attestation` and nonce-less `POST` |
 
 ```rust
@@ -124,6 +125,8 @@ let config = ServerConfig {
 ```
 
 Every limit must be non-zero. `ServerConfig::validate()` returns `ConfigError::Zero(field)` for a zero instead of clamping it, and `router` / `router_async` call it. `max_concurrent` defaults to the available parallelism at the moment `ServerConfig::default()` runs, so call it on the machine that serves, not in a build script.
+
+A request takes its concurrency slot before reading the body, so buffered memory stays within `max_concurrent * max_body_bytes`, and the slot covers the upload. `body_read_timeout` bounds how long a slow uploader can hold it; the handler still gets the rest of `request_timeout`. Raise it for large bodies over a slow link: at the default, a 256 MiB body needs about 27 MB/s.
 
 A blocking handler that times out keeps its concurrency slot until it actually returns, so a stuck handler cannot be replaced by unbounded new work.
 

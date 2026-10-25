@@ -35,6 +35,9 @@ pub const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// Default per-request deadline (30 s).
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default deadline for receiving a request body (10 s).
+pub const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Server limits; peak buffered request memory is about `max_concurrent * max_body_bytes`.
 ///
 /// Every limit must be non-zero; [`ServerConfig::validate`] rejects a zero instead of clamping it.
@@ -46,6 +49,8 @@ pub struct ServerConfig {
     pub max_concurrent: usize,
     /// Per-request deadline; defaults to [`DEFAULT_REQUEST_TIMEOUT`] (30 s).
     pub request_timeout: Duration,
+    /// Deadline for receiving the body, which holds a concurrency slot; defaults to [`DEFAULT_BODY_READ_TIMEOUT`] (10 s).
+    pub body_read_timeout: Duration,
     /// Serves `GET /attestation` and nonce-less `POST /attestation` when true; defaults to false.
     pub allow_unnonced_attestation: bool,
 }
@@ -56,6 +61,7 @@ impl Default for ServerConfig {
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             max_concurrent: thread::available_parallelism().map_or(1, usize::from),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
             allow_unnonced_attestation: false,
         }
     }
@@ -68,6 +74,7 @@ impl ServerConfig {
             ("max_body_bytes", self.max_body_bytes == 0),
             ("max_concurrent", self.max_concurrent == 0),
             ("request_timeout", self.request_timeout.is_zero()),
+            ("body_read_timeout", self.body_read_timeout.is_zero()),
         ];
         match zero.into_iter().find(|&(_, is_zero)| is_zero) {
             Some((field, _)) => Err(ConfigError::Zero(field)),
@@ -116,6 +123,8 @@ pub enum ErrorCode {
     MethodNotAllowed,
     /// 408: the request exceeded the configured deadline.
     RequestTimeout,
+    /// 408: the request body did not arrive within the body read deadline.
+    BodyReadTimeout,
     /// 413: the request body exceeded the configured limit.
     BodyTooLarge,
     /// 422: the application handler rejected the request.
@@ -137,6 +146,7 @@ impl ErrorCode {
             Self::NotFound => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",
             Self::RequestTimeout => "request_timeout",
+            Self::BodyReadTimeout => "body_read_timeout",
             Self::BodyTooLarge => "body_too_large",
             Self::ApplicationError => "application_error",
             Self::Overloaded => "overloaded",
@@ -151,7 +161,7 @@ impl ErrorCode {
             Self::InvalidRequest | Self::BodyReadFailed => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-            Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
+            Self::RequestTimeout | Self::BodyReadTimeout => StatusCode::REQUEST_TIMEOUT,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::ApplicationError => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Overloaded => StatusCode::TOO_MANY_REQUESTS,
@@ -167,6 +177,7 @@ impl ErrorCode {
             Self::NotFound => "no such route",
             Self::MethodNotAllowed => "method not allowed",
             Self::RequestTimeout => "request timed out",
+            Self::BodyReadTimeout => "request body timed out",
             Self::BodyTooLarge => "request body too large",
             Self::ApplicationError => "application error",
             Self::Overloaded => "server is at its concurrency limit",
@@ -434,7 +445,7 @@ async fn post_attestation(
     request: Request,
 ) -> Result<Response, ApiError> {
     let permit = state.permit()?;
-    let bytes = read_body(request, state.config.max_body_bytes).await?;
+    let bytes = read_body(request, &state.config).await?;
     let body: AttestationBody = serde_json::from_slice(&bytes).map_err(|error| {
         ApiError::with_message(
             ErrorCode::InvalidRequest,
@@ -471,11 +482,12 @@ async fn process_data(
     request: Request,
 ) -> Result<Response, ApiError> {
     let permit = state.permit()?;
-    let bytes = read_body(request, state.config.max_body_bytes).await?;
+    let bytes = read_body(request, &state.config).await?;
     (state.handler)(bytes, state.ctx.clone(), permit).await
 }
 
-async fn read_body(request: Request, limit: usize) -> Result<Bytes, ApiError> {
+async fn read_body(request: Request, config: &ServerConfig) -> Result<Bytes, ApiError> {
+    let limit = config.max_body_bytes;
     let declared = request
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -484,7 +496,13 @@ async fn read_body(request: Request, limit: usize) -> Result<Bytes, ApiError> {
     if declared.is_some_and(|len| len > limit as u64) {
         return Err(ApiError::new(ErrorCode::BodyTooLarge));
     }
-    to_bytes(request.into_body(), limit).await.map_err(|error| {
+    let body = tokio::time::timeout(
+        config.body_read_timeout,
+        to_bytes(request.into_body(), limit),
+    )
+    .await
+    .map_err(|_| ApiError::new(ErrorCode::BodyReadTimeout))?;
+    body.map_err(|error| {
         if exceeded_limit(&error) {
             ApiError::new(ErrorCode::BodyTooLarge)
         } else {
@@ -690,6 +708,7 @@ mod tests {
         assert_eq!(config.max_body_bytes, 8 * 1024 * 1024);
         assert!(config.max_concurrent >= 1);
         assert_eq!(config.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.body_read_timeout, Duration::from_secs(10));
         assert!(!config.allow_unnonced_attestation);
     }
 
@@ -716,6 +735,13 @@ mod tests {
                     ..ServerConfig::default()
                 },
                 "request_timeout",
+            ),
+            (
+                ServerConfig {
+                    body_read_timeout: Duration::ZERO,
+                    ..ServerConfig::default()
+                },
+                "body_read_timeout",
             ),
         ];
         for (config, field) in cases {
@@ -744,6 +770,7 @@ mod tests {
             ErrorCode::NotFound,
             ErrorCode::MethodNotAllowed,
             ErrorCode::RequestTimeout,
+            ErrorCode::BodyReadTimeout,
             ErrorCode::BodyTooLarge,
             ErrorCode::ApplicationError,
             ErrorCode::Overloaded,
@@ -1119,6 +1146,47 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("permit was never released");
+    }
+
+    fn stalled_body() -> Body {
+        Body::from_stream(futures_util::stream::once(std::future::pending::<
+            Result<Bytes, io::Error>,
+        >()))
+    }
+
+    #[tokio::test]
+    async fn stalled_body_releases_its_slot_at_the_body_deadline() {
+        let config = ServerConfig {
+            max_concurrent: 1,
+            request_timeout: Duration::from_secs(30),
+            body_read_timeout: Duration::from_millis(200),
+            ..ServerConfig::default()
+        };
+        let app = router(test_context(), config, sign_len).unwrap();
+        let started = tokio::time::Instant::now();
+        let slow = tokio::spawn(call(app.clone(), "POST", "/process_data", stalled_body()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let response = call(app.clone(), "POST", "/process_data", "abc").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        assert_error(
+            slow.await.unwrap(),
+            ErrorCode::BodyReadTimeout,
+            "request body timed out",
+        )
+        .await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let response = call(app.clone(), "POST", "/process_data", "abc").await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = call(app, "POST", "/attestation", stalled_body()).await;
+        assert_error(
+            response,
+            ErrorCode::BodyReadTimeout,
+            "request body timed out",
+        )
+        .await;
     }
 
     #[tokio::test]
