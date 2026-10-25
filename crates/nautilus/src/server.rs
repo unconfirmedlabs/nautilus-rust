@@ -1,6 +1,6 @@
 use std::{
-    error::Error as StdError, future::Future, io, iter, net::SocketAddr, pin::Pin, sync::Arc,
-    thread, time::Duration,
+    error::Error as StdError, future::Future, io, iter, net::SocketAddr, panic::AssertUnwindSafe,
+    pin::Pin, sync::Arc, thread, time::Duration,
 };
 
 use axum::{
@@ -9,9 +9,11 @@ use axum::{
     error_handling::HandleErrorLayer,
     extract::{Request, State},
     http::{StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::FutureExt as _;
 use http_body_util::LengthLimitError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -228,7 +230,7 @@ impl From<NautilusError> for ApiError {
 
 impl From<JoinError> for ApiError {
     fn from(error: JoinError) -> Self {
-        tracing::error!(%error, "blocking task failed");
+        tracing::error!(%error, panic = error.is_panic(), "blocking task failed");
         Self::new(ErrorCode::InternalError)
     }
 }
@@ -343,6 +345,7 @@ fn build_router(
         .method_not_allowed_fallback(|| async { ApiError::new(ErrorCode::MethodNotAllowed) })
         .fallback(|| async { ApiError::new(ErrorCode::NotFound) })
         .with_state(state)
+        .layer(middleware::from_fn(catch_panic))
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(handle_middleware_error))
@@ -401,6 +404,16 @@ async fn handle_middleware_error(error: BoxError) -> ApiError {
     } else {
         tracing::error!(%error, "middleware failed");
         ApiError::new(ErrorCode::InternalError)
+    }
+}
+
+async fn catch_panic(request: Request, next: Next) -> Response {
+    match AssertUnwindSafe(next.run(request)).catch_unwind().await {
+        Ok(response) => response,
+        Err(_) => {
+            tracing::error!("request handler panicked");
+            ApiError::new(ErrorCode::InternalError).into_response()
+        }
     }
 }
 
@@ -980,6 +993,39 @@ mod tests {
             serde_json::from_slice::<Value>(&bytes).unwrap(),
             json!({ "error": "internal_error", "message": "internal error" })
         );
+    }
+
+    async fn assert_panic_is_internal_error(app: Router) {
+        let response = call(app.clone(), "POST", "/process_data", "abc").await;
+        assert_error(response, ErrorCode::InternalError, "internal error").await;
+        let response = call(app.clone(), "POST", "/process_data", "abcdefghijkl").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = call(app, "GET", "/health_check", Body::empty()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    fn eleventh_byte(bytes: &[u8]) -> u64 {
+        u64::from(bytes[10])
+    }
+
+    #[tokio::test]
+    async fn panicking_blocking_handler_is_internal_error() {
+        let app = router(test_context(), ServerConfig::default(), |bytes, ctx| {
+            ctx.sign_intent(Intent(0), &eleventh_byte(&bytes))
+        })
+        .unwrap();
+        assert_panic_is_internal_error(app).await;
+    }
+
+    #[tokio::test]
+    async fn panicking_async_handler_is_internal_error() {
+        let app = router_async(
+            test_context(),
+            ServerConfig::default(),
+            |bytes, ctx| async move { ctx.sign_intent(Intent(0), &eleventh_byte(&bytes)) },
+        )
+        .unwrap();
+        assert_panic_is_internal_error(app).await;
     }
 
     #[tokio::test]

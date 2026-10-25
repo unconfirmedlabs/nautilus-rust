@@ -5,7 +5,7 @@ The reproducibility target is the EIF measurement (PCR0, PCR1, PCR2), not the Ru
 ## Inputs
 
 - `rust-toolchain.toml` pins Rust 1.94.1 for local and CI builds; `Cargo.lock` is committed and every build uses `--locked`.
-- Release profile: `codegen-units = 1`, `lto = "fat"`, `panic = "abort"`, stripped symbols. No crate has a `build.rs`.
+- Release profile: `codegen-units = 1`, `lto = "fat"`, stripped symbols, and the default `panic = "unwind"`. No crate has a `build.rs`.
 - `Containerfile.eif` pins every StageX image by digest. The pins currently mix two StageX releases:
   - `sx2026.03.0`: `core-rust` (Rust 1.94.0), `core-libunwind`, `core-libcxx`, `core-libcxxabi`;
   - `sx2025.08.0`: musl, busybox, gcc, llvm, openssl, ca-certificates, socat, eif_build, nit and the Nitro kernel.

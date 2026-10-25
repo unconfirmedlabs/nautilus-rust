@@ -16,6 +16,7 @@ axum.workspace = true
 bcs.workspace = true
 blake2.workspace = true
 ed25519-dalek.workspace = true
+futures-util = { workspace = true, features = ["std"] }
 hex.workspace = true
 http-body-util.workspace = true
 nautilus-nsm = { path = "../nautilus-nsm" }
@@ -28,5 +29,4 @@ tower.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }

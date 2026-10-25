@@ -148,6 +148,10 @@ Handlers return `NautilusError`. The response is JSON `ErrorBody { error: ErrorC
 
 The full code table is in the README.
 
+### Panics
+
+A panic in a handler, blocking or async, is caught: the request gets `internal_error`, the panic is logged, and the server keeps serving with the same key. This needs unwinding, which is the workspace release profile. Do not set `panic = "abort"` in an enclave app: a single panicking request would then terminate the enclave and lose its per-boot key, and the new boot would have to be registered again.
+
 ## Logging
 
 The crate logs through `tracing` and installs nothing. Install a subscriber in `main`, for example `tracing_subscriber::fmt().init()`, or boot, attestation and error logs are discarded.
