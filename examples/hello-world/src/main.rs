@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use nautilus::{Intent, NautilusContext, NautilusError, SignedResponse};
+use nautilus::{Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse};
 use serde::Serialize;
 
 const HELLO_INTENT: Intent = Intent(0);
@@ -10,9 +10,9 @@ struct Hello {
     input_len: u64,
 }
 
-async fn process_data(
+fn process_data(
     bytes: Bytes,
-    ctx: NautilusContext,
+    ctx: &NautilusContext,
 ) -> Result<SignedResponse<Hello>, NautilusError> {
     let hello = Hello {
         message: "hello from nautilus-rust".to_owned(),
@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let ctx = NautilusContext::development();
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
-    let app = nautilus::router(ctx, process_data);
+    let app = nautilus::router(ctx, ServerConfig::default(), process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
     Ok(())
 }

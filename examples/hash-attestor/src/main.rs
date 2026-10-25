@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use nautilus::{Intent, NautilusContext, NautilusError, SignedResponse};
+use nautilus::{Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -11,9 +11,9 @@ struct HashAttestation {
     length: u64,
 }
 
-async fn process_data(
+fn process_data(
     bytes: Bytes,
-    ctx: NautilusContext,
+    ctx: &NautilusContext,
 ) -> Result<SignedResponse<HashAttestation>, NautilusError> {
     let attestation = HashAttestation {
         digest: Sha256::digest(bytes.as_ref()).to_vec(),
@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let ctx = NautilusContext::development();
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
-    let app = nautilus::router(ctx, process_data);
+    let app = nautilus::router(ctx, ServerConfig::default(), process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
     Ok(())
 }

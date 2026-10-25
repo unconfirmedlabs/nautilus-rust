@@ -75,7 +75,8 @@ It includes:
 - `NautilusContext`: shared enclave context passed to business logic
 - `EnclaveIdentity`: Ed25519 identity and Sui address helper
 - `Attestor`: trait for attestation providers
-- `router`: standard HTTP route scaffold
+- `router` / `router_async`: standard HTTP routes with body, concurrency and timeout limits (`ServerConfig`)
+- `serve`: HTTP server with graceful shutdown on SIGTERM and Ctrl-C
 - `Intent`, `IntentMessage`, `SignedResponse`: domain-separated signing of typed payloads
 - `verify_signed_response`: off-chain verification of signed responses
 - `NsmAttestor`: the `/dev/nsm` attestation provider
@@ -149,7 +150,7 @@ Write application logic as a handler:
 
 ```rust
 use axum::body::Bytes;
-use nautilus::{Intent, NautilusContext, NautilusError, SignedResponse, router};
+use nautilus::{Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse, router};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -161,9 +162,9 @@ struct HashAttestation {
     length: u64,
 }
 
-async fn process_data(
+fn process_data(
     bytes: Bytes,
-    ctx: NautilusContext,
+    ctx: &NautilusContext,
 ) -> Result<SignedResponse<HashAttestation>, NautilusError> {
     let attestation = HashAttestation {
         digest: Sha256::digest(bytes.as_ref()).to_vec(),
@@ -182,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
     let ctx = NautilusContext::development();
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
-    let app = router(ctx, process_data);
+    let app = router(ctx, ServerConfig::default(), process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
     Ok(())
 }
@@ -221,7 +222,24 @@ See [docs/kagi.md](docs/kagi.md) and [docs/signing-vectors.md](docs/signing-vect
 }
 ```
 
-`POST /process_data` receives raw bytes and passes them to the application handler.
+`POST /process_data` receives raw bytes and passes them to the application handler. `router` runs the handler on the blocking thread pool; `router_async` takes an async handler instead.
+
+`ServerConfig` bounds the server: `max_body_bytes` (default 8 MiB), `max_concurrent` in-flight `/attestation` and `/process_data` requests (default: available parallelism), and `request_timeout` (default 30 s). Peak buffered request memory is about `max_concurrent * max_body_bytes`; size it to the enclave. `/health_check` is not limited.
+
+Errors are JSON `{"error": "<code>", "message": "..."}` with stable codes:
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `invalid_request` | 400 | framework validation failed (hex, JSON, missing nonce, attestation bounds) |
+| `body_read_failed` | 400 | the request body could not be read |
+| `request_timeout` | 408 | `request_timeout` elapsed |
+| `body_too_large` | 413 | body exceeds `max_body_bytes` |
+| `application_error` | 422 | handler returned `NautilusError::Application`; `message` is the app's |
+| `overloaded` | 429 | `max_concurrent` requests already in flight |
+| `internal_error` | 500 | any other failure |
+| `attestation_unavailable` | 503 | the attestation provider failed |
+
+Internal and attestation error details are logged, never returned.
 
 ## Attestation Model
 

@@ -22,6 +22,7 @@ pub use intent::{
 };
 pub use nsm::NsmAttestor;
 pub use server::{
-    AttestationBody, ErrorBody, HealthCheckBody, ServerConfig, router, router_with_config, serve,
+    AttestationBody, DEFAULT_MAX_BODY_BYTES, DEFAULT_REQUEST_TIMEOUT, ErrorBody, ErrorCode,
+    HealthCheckBody, ServerConfig, router, router_async, serve, serve_with_shutdown,
 };
 pub use util::{decode_hex, encode_hex};

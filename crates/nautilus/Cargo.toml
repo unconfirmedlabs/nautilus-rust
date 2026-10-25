@@ -17,14 +17,16 @@ bcs.workspace = true
 blake2.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
+http-body-util.workspace = true
 nautilus-nsm = { path = "../nautilus-nsm" }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tower.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-http-body-util.workspace = true
-tower.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
