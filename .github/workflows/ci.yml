@@ -6,35 +6,83 @@ on:
     branches:
       - main
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.94.1
+  MUSL_TARGET: x86_64-unknown-linux-musl
+
 jobs:
-  rust:
+  fmt:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.94.1
-          components: clippy,rustfmt
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default features
+            features: ""
+          - name: test-utils
+            features: --features test-utils
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - run: cargo test --workspace --all-targets --locked ${{ matrix.features }}
 
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-      - name: Run tests
-        run: cargo test --workspace --all-targets --locked
-
-      - name: Run tests with test-utils
-        run: cargo test --workspace --all-targets --locked --features test-utils
-
-      - name: Check examples do not enable test-utils
+  musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ env.MUSL_TARGET }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binaries for musl
+        run: cargo build --workspace --release --locked --target "$MUSL_TARGET"
+      - name: Examples do not enable test-utils
         run: |
-          sh scripts/assert-no-test-utils.sh nautilus-example-hash-attestor x86_64-unknown-linux-musl
-          sh scripts/assert-no-test-utils.sh nautilus-example-hello-world x86_64-unknown-linux-musl
+          sh scripts/assert-no-test-utils.sh nautilus-example-hash-attestor "$MUSL_TARGET"
+          sh scripts/assert-no-test-utils.sh nautilus-example-hello-world "$MUSL_TARGET"
+      - name: Guard rejects test-utils
+        run: |
+          for package in nautilus-example-hash-attestor nautilus-example-hello-world; do
+            if sh scripts/assert-no-test-utils.sh "$package" "$MUSL_TARGET" --features test-utils; then
+              echo "guard accepted $package with test-utils" >&2
+              exit 1
+            fi
+          done
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2
+      - run: cargo audit
