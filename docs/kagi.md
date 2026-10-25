@@ -2,7 +2,7 @@
 
 [Kagi](https://github.com/unconfirmedlabs/kagi) is the Sui Move companion to Nautilus Rust. Nautilus Rust runs in the enclave and produces an attestation document and intent signatures; Kagi registers the attested key on chain and verifies the signatures.
 
-This page targets Kagi at `d2cf902` ("Harden policies and enclaves"). That version is not published yet; the earlier testnet package has a different API (PCRs set at creation, no versioning). Kagi's README still names `NautilusContext::sign_bcs_payload`, which no longer exists; the Nautilus Rust equivalent is `NautilusContext::sign_intent`.
+This page targets Kagi at `226cd10`, whose Move API is unchanged since `d2cf902` ("Harden policies and enclaves"). That version is not published yet; the earlier testnet package has a different API (PCRs set at creation, no versioning). Kagi's README names `NautilusContext::sign_intent` and pins the same intent message vector as [signing-vectors.md](signing-vectors.md).
 
 ## Kagi API
 
