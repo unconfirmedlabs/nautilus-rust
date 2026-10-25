@@ -32,7 +32,7 @@ The default package is `nautilus-example-hash-attestor`, built without `test-uti
 - sets initramfs timestamps to epoch 0, sorts entries, and writes `cpio --reproducible` through `gzip --best --no-name`;
 - runs `eif_build` with a fixed kernel and command line and writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
 
-CI builds the workspace for `x86_64-unknown-linux-musl` but does not build the EIF.
+CI builds the workspace for `x86_64-unknown-linux-musl` but does not build the EIF. CI actions are pinned by commit SHA, and `cargo deny` (`deny.toml`) restricts dependency sources to crates.io and licenses to an allow list, alongside `cargo audit`.
 
 ## Before Publishing PCRs
 
