@@ -108,20 +108,7 @@ impl Nsm {
 
     /// Returns `len` bytes from the NSM random number generator.
     pub fn random(&self, len: usize) -> Result<Vec<u8>, NsmError> {
-        let request = encode_get_random_request()?;
-        let mut output = Vec::with_capacity(len);
-        while output.len() < len {
-            let response = self.transact(&request)?;
-            let chunk = decode_get_random_response(&response)?;
-            if chunk.is_empty() {
-                return Err(NsmError::MalformedResponse(
-                    "NSM returned empty random response".to_owned(),
-                ));
-            }
-            output.extend_from_slice(&chunk);
-        }
-        output.truncate(len);
-        Ok(output)
+        collect_random(len, |request| self.transact(request))
     }
 
     fn transact(&self, request: &[u8]) -> Result<Vec<u8>, NsmError> {
@@ -158,16 +145,37 @@ impl Nsm {
             return Err(NsmError::Io(io::Error::last_os_error()));
         }
 
-        if message.response.len > response.len() {
-            return Err(NsmError::MalformedResponse(format!(
-                "NSM response length {} exceeds buffer {}",
-                message.response.len,
-                response.len()
-            )));
-        }
-        response.truncate(message.response.len);
+        response.truncate(checked_response_len(message.response.len, response.len())?);
         Ok(response)
     }
+}
+
+fn collect_random(
+    len: usize,
+    mut transact: impl FnMut(&[u8]) -> Result<Vec<u8>, NsmError>,
+) -> Result<Vec<u8>, NsmError> {
+    let request = encode_get_random_request()?;
+    let mut output = Vec::with_capacity(len);
+    while output.len() < len {
+        let chunk = decode_get_random_response(&transact(&request)?)?;
+        if chunk.is_empty() {
+            return Err(NsmError::MalformedResponse(
+                "NSM returned empty random response".to_owned(),
+            ));
+        }
+        output.extend_from_slice(&chunk);
+    }
+    output.truncate(len);
+    Ok(output)
+}
+
+fn checked_response_len(reported: usize, capacity: usize) -> Result<usize, NsmError> {
+    if reported > capacity {
+        return Err(NsmError::MalformedResponse(format!(
+            "NSM response length {reported} exceeds buffer {capacity}"
+        )));
+    }
+    Ok(reported)
 }
 
 fn encode_attestation_request(
@@ -386,6 +394,56 @@ mod tests {
 
         let error = decode_attestation_response(&response).unwrap_err();
         assert!(matches!(error, NsmError::Device(message) if message == "InvalidArgument"));
+    }
+
+    fn random_response(bytes: &[u8]) -> Vec<u8> {
+        encode_response(Value::Map(vec![(
+            Value::Text("GetRandom".to_owned()),
+            Value::Map(vec![(
+                Value::Text("random".to_owned()),
+                Value::Bytes(bytes.to_vec()),
+            )]),
+        )]))
+    }
+
+    #[test]
+    fn random_concatenates_chunks_and_truncates() {
+        let mut calls = 0u8;
+        let output = collect_random(10, |request| {
+            assert_eq!(request, encode_get_random_request().unwrap());
+            calls += 1;
+            Ok(random_response(&[calls; 4]))
+        })
+        .unwrap();
+        assert_eq!(calls, 3);
+        assert_eq!(output, [1, 1, 1, 1, 2, 2, 2, 2, 3, 3]);
+        assert!(collect_random(0, |_| unreachable!()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn random_rejects_empty_chunk() {
+        let error = collect_random(4, |_| Ok(random_response(&[]))).unwrap_err();
+        assert!(matches!(error, NsmError::MalformedResponse(_)));
+    }
+
+    #[test]
+    fn random_propagates_device_error() {
+        let error = collect_random(4, |_| {
+            Ok(encode_response(Value::Map(vec![(
+                Value::Text("Error".to_owned()),
+                Value::Text("InternalError".to_owned()),
+            )])))
+        })
+        .unwrap_err();
+        assert!(matches!(error, NsmError::Device(message) if message == "InternalError"));
+    }
+
+    #[test]
+    fn response_length_beyond_buffer_is_malformed() {
+        assert_eq!(checked_response_len(0x3000, 0x3000).unwrap(), 0x3000);
+        let error = checked_response_len(0x3001, 0x3000).unwrap_err();
+        assert!(matches!(error, NsmError::MalformedResponse(_)));
+        assert!(error.to_string().contains("12289 exceeds buffer 12288"));
     }
 
     #[test]

@@ -190,6 +190,29 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_malformed_signature() {
+        let ctx = context();
+        let signed = ctx.sign_intent(Intent(1), payload()).unwrap();
+
+        let mut short = signed.clone();
+        short.signature.truncate(126);
+        let error = verify_signed_response(&ctx.public_key(), Intent(1), &short).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "crypto error: signature must be 64 bytes"
+        );
+
+        let mut long = signed.clone();
+        long.signature.push_str("00");
+        assert!(verify_signed_response(&ctx.public_key(), Intent(1), &long).is_err());
+
+        let mut not_hex = signed;
+        not_hex.signature = "zz".repeat(64);
+        let error = verify_signed_response(&ctx.public_key(), Intent(1), &not_hex).unwrap_err();
+        assert!(matches!(error, NautilusError::Hex(_)));
+    }
+
+    #[test]
     fn sign_intent_stamps_current_time() {
         let signed = context().sign_intent(Intent(1), payload()).unwrap();
         let now = SystemTime::now()

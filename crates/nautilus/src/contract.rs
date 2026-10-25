@@ -211,12 +211,13 @@ pub fn golden_vector<T: Serialize + ?Sized>(
     })
 }
 
-/// Generates one `#[test]` per `name: (intent, timestamp_ms, payload) => "hex";` entry that prints and asserts the vector.
+/// Generates one `#[test]` per `name: (intent, timestamp_ms, payload) => "hex";` entry, after any attributes given before `name`, that prints and asserts the vector.
 #[macro_export]
 macro_rules! golden_vectors {
-    ($($name:ident: ($intent:expr, $timestamp_ms:expr, $payload:expr $(,)?) => $hex:expr;)+) => {
+    ($($(#[$meta:meta])* $name:ident: ($intent:expr, $timestamp_ms:expr, $payload:expr $(,)?) => $hex:expr;)+) => {
         $(
             #[test]
+            $(#[$meta])*
             fn $name() {
                 let vector = $crate::contract::golden_vector(
                     stringify!($name),
@@ -265,6 +266,20 @@ mod tests {
             bcs::from_bytes::<U256Bytes>(&bytes).unwrap(),
             U256Bytes::from(1u64)
         );
+    }
+
+    #[test]
+    fn u256_from_u128_keeps_high_bits() {
+        let value = U256Bytes::from(u128::MAX - 1);
+        let mut expected = [0xffu8; 16].to_vec();
+        expected[0] = 0xfe;
+        expected.extend([0u8; 16]);
+        assert_eq!(bcs::to_bytes(&value).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_string(&value).unwrap(),
+            format!("\"0x{}{}fe\"", "0".repeat(32), "f".repeat(30))
+        );
+        assert_eq!(U256Bytes::from(1u128 << 127).to_le_bytes()[15], 0x80);
     }
 
     #[test]
@@ -338,6 +353,11 @@ mod tests {
             1_744_038_900_000,
             WeatherPayload { location: "San Francisco".to_owned(), temperature: 13 },
         ) => "0020b1d110960100000d53616e204672616e636973636f0d00000000000000";
+    }
+
+    crate::golden_vectors! {
+        #[should_panic(expected = "golden vector changed: const CHANGED_VECTOR: vector<u8> = x\"03000000000000000001\";")]
+        changed_vector: (3u8, 0, 1u8) => "03000000000000000002";
     }
 
     #[test]
