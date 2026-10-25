@@ -9,6 +9,7 @@ use ed25519_dalek::{
     ed25519::signature::{Signer as _, Verifier as _},
 };
 use rand::{RngCore as _, rngs::OsRng};
+use zeroize::Zeroizing;
 
 use crate::{NautilusError, encode_hex};
 
@@ -36,30 +37,30 @@ pub struct EnclaveIdentity {
 impl EnclaveIdentity {
     /// Generates a new identity from OS randomness.
     pub fn generate() -> Self {
-        let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
-        Self::from_seed_bytes(seed)
+        let mut seed = Zeroizing::new([0u8; 32]);
+        OsRng.fill_bytes(seed.as_mut());
+        Self::from_seed_bytes(&seed)
     }
 
     /// Generates a new identity by XOR-mixing OS randomness with caller entropy, such as NSM output.
     pub fn generate_with_entropy(extra_entropy: &[u8]) -> Self {
-        let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
+        let mut seed = Zeroizing::new([0u8; 32]);
+        OsRng.fill_bytes(seed.as_mut());
         for (index, byte) in extra_entropy.iter().take(32).enumerate() {
             seed[index] ^= byte;
         }
-        Self::from_seed_bytes(seed)
+        Self::from_seed_bytes(&seed)
     }
 
     /// Creates an identity from a fixed seed. Test-only: the key is as public as the seed.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn from_seed(seed: [u8; 32]) -> Self {
-        Self::from_seed_bytes(seed)
+        Self::from_seed_bytes(&seed)
     }
 
-    fn from_seed_bytes(seed: [u8; 32]) -> Self {
+    fn from_seed_bytes(seed: &[u8; 32]) -> Self {
         Self {
-            signing_key: Arc::new(SigningKey::from_bytes(&seed)),
+            signing_key: Arc::new(SigningKey::from_bytes(seed)),
         }
     }
 

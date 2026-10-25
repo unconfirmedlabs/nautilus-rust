@@ -556,6 +556,7 @@ dependencies = [
  "tokio-vsock",
  "tower",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

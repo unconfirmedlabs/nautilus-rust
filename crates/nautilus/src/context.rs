@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::Serialize;
+use zeroize::Zeroizing;
 
 use crate::{
     AttestationRequest, Attestor, EnclaveIdentity, Intent, IntentMessage, NautilusError,
@@ -37,7 +38,7 @@ impl NautilusContext {
     }
 
     fn with_entropy_from(attestor: impl Attestor) -> Result<Self, NautilusError> {
-        let entropy = attestor.random(32)?;
+        let entropy = Zeroizing::new(attestor.random(32)?);
         Ok(Self::with_signer(
             EnclaveIdentity::generate_with_entropy(&entropy),
             attestor,
