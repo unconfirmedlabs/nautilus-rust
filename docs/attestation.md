@@ -35,4 +35,6 @@ let ctx = nautilus::NautilusContext::from_runtime()?;
 
 ## Freshness
 
-Prefer `POST /attestation` with a random nonce supplied by the verifier. `GET /attestation` exists for simple diagnostics and does not provide replay protection by itself.
+`POST /attestation` requires a random nonce supplied by the verifier; requests without one (or with an empty one) are rejected with `400 invalid_request`. `nonce` and `user_data` are limited to 512 bytes each (`MAX_ATTESTATION_DATA_BYTES`, Sui's `MAX_USER_DATA_LENGTH`), and the public key is always the 32-byte enclave key, so every returned document can be registered on Sui.
+
+Setting `ServerConfig::allow_unnonced_attestation` registers `GET /attestation` and accepts nonce-less `POST /attestation` for diagnostics. Those documents carry no verifier freshness and do not provide replay protection.

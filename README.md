@@ -203,18 +203,16 @@ See [docs/kagi.md](docs/kagi.md) and [docs/signing-vectors.md](docs/signing-vect
 
 ## Standard Routes
 
-`nautilus::router` creates four routes:
+`nautilus::router` creates these routes:
 
 - `GET /health_check`
-- `GET /attestation`
 - `POST /attestation`
 - `POST /process_data`
+- `GET /attestation`, only when `ServerConfig::allow_unnonced_attestation` is set
 
 `GET /health_check` returns the enclave public key and derived Sui address.
 
-`GET /attestation` returns an attestation document without verifier-provided freshness. It is useful for diagnostics.
-
-`POST /attestation` accepts optional hex-encoded `nonce` and `user_data` fields:
+`POST /attestation` takes a hex-encoded `nonce` (required unless `allow_unnonced_attestation` is set) and optional hex-encoded `user_data`, each at most 512 bytes (`MAX_ATTESTATION_DATA_BYTES`, the Sui limit):
 
 ```json
 {

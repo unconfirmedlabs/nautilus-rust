@@ -25,9 +25,9 @@ my-enclave-app/
 `nautilus::router` creates:
 
 - `GET /health_check`
-- `GET /attestation`
-- `POST /attestation`
+- `POST /attestation` (nonce required, nonce and user data at most 512 bytes)
 - `POST /process_data`
+- `GET /attestation`, only with `ServerConfig::allow_unnonced_attestation`
 
 `POST /process_data` receives raw request bytes and passes them to the handler you provide.
 

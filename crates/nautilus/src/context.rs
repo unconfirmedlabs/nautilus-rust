@@ -112,7 +112,7 @@ impl NautilusContext {
         })
     }
 
-    /// Requests an attestation document bound to this context's public key.
+    /// Requests an attestation document bound to this context's public key after validating its bounds; blocks on the attestor.
     pub fn attestation(
         &self,
         nonce: Option<Vec<u8>>,
@@ -121,10 +121,11 @@ impl NautilusContext {
         let mut request = AttestationRequest::new(self.public_key());
         request.nonce = nonce;
         request.user_data = user_data;
+        request.validate()?;
         Ok(self.attestor.attest(request)?)
     }
 
-    /// Returns randomness from the configured attestation provider.
+    /// Returns randomness from the configured attestation provider; blocks on the attestor.
     pub fn random(&self, len: usize) -> Result<Vec<u8>, NautilusError> {
         Ok(self.attestor.random(len)?)
     }
@@ -187,6 +188,19 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].public_key, ctx.public_key().to_vec());
         assert_eq!(requests[0].nonce, Some(nonce));
+    }
+
+    #[test]
+    fn attestation_rejects_oversized_nonce_before_attestor() {
+        let fake = FakeAttestor::default();
+        let ctx = NautilusContext::new(EnclaveIdentity::from_seed([3u8; 32]), fake.clone());
+
+        let error = ctx.attestation(Some(vec![0; 513]), None).unwrap_err();
+        assert!(matches!(
+            error,
+            NautilusError::Attestation(AttestationError::InvalidRequest(_))
+        ));
+        assert!(fake.requests().is_empty());
     }
 
     #[test]

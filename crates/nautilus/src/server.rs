@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{NautilusContext, NautilusError, decode_hex, encode_hex};
+use crate::{AttestationError, NautilusContext, NautilusError, decode_hex, encode_hex};
 
 /// Default maximum request body size for `/process_data`.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -20,12 +20,15 @@ pub const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 pub struct ServerConfig {
     /// Maximum accepted body size for `/process_data`.
     pub max_body_bytes: usize,
+    /// Serves `GET /attestation` and nonce-less `POST /attestation` when true; defaults to false.
+    pub allow_unnonced_attestation: bool,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            allow_unnonced_attestation: false,
         }
     }
 }
@@ -81,6 +84,11 @@ where
     Fut: Future<Output = Result<T, NautilusError>> + Send + 'static,
     T: Serialize + Send + 'static,
 {
+    let attestation = if config.allow_unnonced_attestation {
+        get(get_attestation::<F>).post(post_attestation::<F>)
+    } else {
+        post(post_attestation::<F>)
+    };
     let state = Arc::new(ServerState {
         ctx,
         config,
@@ -89,8 +97,7 @@ where
 
     Router::new()
         .route("/health_check", get(health_check::<F>))
-        .route("/attestation", get(get_attestation::<F>))
-        .route("/attestation", post(post_attestation::<F>))
+        .route("/attestation", attestation)
         .route("/process_data", post(handle_process_data::<F, Fut, T>))
         .with_state(state)
 }
@@ -109,10 +116,7 @@ async fn health_check<F>(State(state): State<Arc<ServerState<F>>>) -> Json<Healt
 }
 
 async fn get_attestation<F>(State(state): State<Arc<ServerState<F>>>) -> Response {
-    match state.ctx.attestation(None, None) {
-        Ok(doc) => Json(serde_json::json!({ "attestation": encode_hex(doc) })).into_response(),
-        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
-    }
+    attest(state.ctx.clone(), None, None).await
 }
 
 async fn post_attestation<F>(
@@ -127,10 +131,30 @@ async fn post_attestation<F>(
         Ok(value) => value,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
+    if !state.config.allow_unnonced_attestation && nonce.as_ref().is_none_or(Vec::is_empty) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            AttestationError::InvalidRequest("nonce is required".to_owned()).into(),
+        );
+    }
+    attest(state.ctx.clone(), nonce, user_data).await
+}
 
-    match state.ctx.attestation(nonce, user_data) {
-        Ok(doc) => Json(serde_json::json!({ "attestation": encode_hex(doc) })).into_response(),
-        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+async fn attest(
+    ctx: NautilusContext,
+    nonce: Option<Vec<u8>>,
+    user_data: Option<Vec<u8>>,
+) -> Response {
+    match tokio::task::spawn_blocking(move || ctx.attestation(nonce, user_data)).await {
+        Ok(Ok(doc)) => Json(serde_json::json!({ "attestation": encode_hex(doc) })).into_response(),
+        Ok(Err(error @ NautilusError::Attestation(AttestationError::InvalidRequest(_)))) => {
+            error_response(StatusCode::BAD_REQUEST, error)
+        }
+        Ok(Err(error)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            NautilusError::Crypto(error.to_string()),
+        ),
     }
 }
 
@@ -170,7 +194,7 @@ fn decode_optional_hex(value: Option<&str>) -> Result<Option<Vec<u8>>, NautilusE
 fn error_response(status: StatusCode, error: NautilusError) -> Response {
     let body = ErrorBody {
         error: match status {
-            StatusCode::BAD_REQUEST => "bad_request",
+            StatusCode::BAD_REQUEST => "invalid_request",
             StatusCode::PAYLOAD_TOO_LARGE => "payload_too_large",
             StatusCode::UNPROCESSABLE_ENTITY => "application_error",
             _ => "internal_error",
@@ -222,7 +246,38 @@ mod tests {
     }
 
     fn test_app() -> Router {
-        router_with_config(test_context(), ServerConfig { max_body_bytes: 4 }, sign_len)
+        router_with_config(
+            test_context(),
+            ServerConfig {
+                max_body_bytes: 4,
+                ..ServerConfig::default()
+            },
+            sign_len,
+        )
+    }
+
+    fn unnonced_app() -> Router {
+        router_with_config(
+            test_context(),
+            ServerConfig {
+                allow_unnonced_attestation: true,
+                ..ServerConfig::default()
+            },
+            sign_len,
+        )
+    }
+
+    async fn send(app: Router, method: &str, body: &'static str) -> Response {
+        app.oneshot(
+            Request::builder()
+                .method(method)
+                .uri("/attestation")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
     }
 
     async fn response_json(response: Response) -> serde_json::Value {
@@ -268,6 +323,52 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_slice(&hex::decode(doc_hex).unwrap()).unwrap();
         assert_eq!(doc["nonce"], "010203");
+    }
+
+    #[tokio::test]
+    async fn unnonced_attestation_is_rejected_by_default() {
+        assert_eq!(
+            send(test_app(), "GET", "").await.status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        for body in ["{}", r#"{"nonce":""}"#, r#"{"user_data":"0x01"}"#] {
+            let response = send(test_app(), "POST", body).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(response_json(response).await["error"], "invalid_request");
+        }
+    }
+
+    #[tokio::test]
+    async fn unnonced_attestation_is_served_when_allowed() {
+        assert_eq!(
+            send(unnonced_app(), "GET", "").await.status(),
+            StatusCode::OK
+        );
+        let response = send(unnonced_app(), "POST", "{}").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let doc: serde_json::Value =
+            serde_json::from_slice(&hex::decode(json["attestation"].as_str().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(doc["nonce"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn attestation_rejects_oversized_nonce() {
+        let body = format!(r#"{{"nonce":"{}"}}"#, "00".repeat(513));
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/attestation")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_json(response).await["error"], "invalid_request");
     }
 
     #[tokio::test]

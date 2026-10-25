@@ -13,7 +13,7 @@ mod server;
 pub mod testing;
 mod util;
 
-pub use attestation::{AttestationRequest, Attestor};
+pub use attestation::{AttestationRequest, Attestor, MAX_ATTESTATION_DATA_BYTES};
 pub use context::NautilusContext;
 pub use crypto::{EnclaveIdentity, PublicKeyBytes, SignatureBytes, Signer};
 pub use error::{AttestationError, NautilusError};

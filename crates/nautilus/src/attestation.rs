@@ -1,5 +1,10 @@
 use crate::AttestationError;
 
+/// Maximum nonce and user data length accepted by Sui (`MAX_USER_DATA_LENGTH`).
+pub const MAX_ATTESTATION_DATA_BYTES: usize = 512;
+
+const PUBLIC_KEY_BYTES: usize = 32;
+
 /// Request passed to an attestation backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttestationRequest {
@@ -32,6 +37,30 @@ impl AttestationRequest {
         self.user_data = Some(user_data.into());
         self
     }
+
+    /// Checks that the public key is 32 bytes and nonce and user data are at most [`MAX_ATTESTATION_DATA_BYTES`].
+    pub fn validate(&self) -> Result<(), AttestationError> {
+        if self.public_key.len() != PUBLIC_KEY_BYTES {
+            return Err(AttestationError::InvalidRequest(format!(
+                "public_key must be exactly {PUBLIC_KEY_BYTES} bytes, got {}",
+                self.public_key.len()
+            )));
+        }
+        check_data_len("nonce", self.nonce.as_deref())?;
+        check_data_len("user_data", self.user_data.as_deref())
+    }
+}
+
+fn check_data_len(field: &str, value: Option<&[u8]>) -> Result<(), AttestationError> {
+    match value {
+        Some(value) if value.len() > MAX_ATTESTATION_DATA_BYTES => {
+            Err(AttestationError::InvalidRequest(format!(
+                "{field} must be at most {MAX_ATTESTATION_DATA_BYTES} bytes, got {}",
+                value.len()
+            )))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Attestation provider abstraction.
@@ -44,4 +73,48 @@ pub trait Attestor: Send + Sync + 'static {
 
     /// Returns hardware or provider randomness.
     fn random(&self, len: usize) -> Result<Vec<u8>, AttestationError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> AttestationRequest {
+        AttestationRequest::new([0u8; 32])
+    }
+
+    fn assert_invalid(request: AttestationRequest, field: &str) {
+        match request.validate() {
+            Err(AttestationError::InvalidRequest(message)) => assert!(message.starts_with(field)),
+            other => panic!("expected invalid request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_data_up_to_limit() {
+        for len in [0, 511, 512] {
+            request()
+                .with_nonce(vec![1; len])
+                .with_user_data(vec![2; len])
+                .validate()
+                .unwrap();
+        }
+        request().validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_oversized_nonce() {
+        assert_invalid(request().with_nonce(vec![1; 513]), "nonce");
+    }
+
+    #[test]
+    fn rejects_oversized_user_data() {
+        assert_invalid(request().with_user_data(vec![1; 513]), "user_data");
+    }
+
+    #[test]
+    fn rejects_wrong_public_key_length() {
+        assert_invalid(AttestationRequest::new([0u8; 31]), "public_key");
+        assert_invalid(AttestationRequest::new([0u8; 33]), "public_key");
+    }
 }
