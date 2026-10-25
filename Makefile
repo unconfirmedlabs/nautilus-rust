@@ -34,6 +34,7 @@ run-eif: $(OUT_DIR)/nitro.eif
 
 .PHONY: run-eif-debug
 run-eif-debug: $(OUT_DIR)/nitro.eif
+	@echo 'WARNING: debug mode reports all-zero PCRs; this enclave cannot be attested or registered with Kagi.' >&2
 	sudo nitro-cli run-enclave \
 		--cpu-count 2 \
 		--memory 512M \
