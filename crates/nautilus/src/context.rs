@@ -4,21 +4,22 @@ use serde::Serialize;
 
 use crate::{
     AttestationRequest, Attestor, EnclaveIdentity, Intent, IntentMessage, NautilusError,
-    NsmAttestor, PublicKeyBytes, SignedResponse, Signer as _, encode_hex, intent_message, now_ms,
+    NsmAttestor, PublicKeyBytes, SignedResponse, Signer, crypto::sui_address, encode_hex,
+    intent_message, now_ms,
 };
 
 /// App-facing context passed to business logic.
 #[derive(Clone)]
 pub struct NautilusContext {
-    identity: EnclaveIdentity,
+    signer: Arc<dyn Signer>,
     attestor: Arc<dyn Attestor>,
 }
 
 impl NautilusContext {
-    /// Creates a context from an identity and attestation provider.
-    pub fn new(identity: EnclaveIdentity, attestor: impl Attestor) -> Self {
+    /// Creates a context from a signer and an attestation provider.
+    pub fn with_signer(signer: impl Signer, attestor: impl Attestor) -> Self {
         let ctx = Self {
-            identity,
+            signer: Arc::new(signer),
             attestor: Arc::new(attestor),
         };
         tracing::info!(
@@ -37,7 +38,7 @@ impl NautilusContext {
 
     fn with_entropy_from(attestor: impl Attestor) -> Result<Self, NautilusError> {
         let entropy = attestor.random(32)?;
-        Ok(Self::new(
+        Ok(Self::with_signer(
             EnclaveIdentity::generate_with_entropy(&entropy),
             attestor,
         ))
@@ -49,7 +50,7 @@ impl NautilusContext {
         tracing::warn!(
             "development context: the signing key is public and fake attestation must never be deployed"
         );
-        Self::new(
+        Self::with_signer(
             EnclaveIdentity::from_seed([42u8; 32]),
             crate::testing::FakeAttestor::default(),
         )
@@ -62,17 +63,17 @@ impl NautilusContext {
 
     /// Returns the public key bytes.
     pub fn public_key(&self) -> PublicKeyBytes {
-        self.identity.public_key()
+        self.signer.public_key()
     }
 
     /// Returns the public key as hex.
     pub fn public_key_hex(&self) -> String {
-        self.identity.public_key_hex()
+        encode_hex(self.public_key())
     }
 
     /// Returns the Sui address.
     pub fn sui_address(&self) -> String {
-        self.identity.sui_address()
+        sui_address(&self.public_key())
     }
 
     /// Signs `payload` as an intent message stamped with [`now_ms`].
@@ -103,7 +104,7 @@ impl NautilusContext {
     ) -> Result<SignedResponse<T>, NautilusError> {
         let message = intent_message(intent, timestamp_ms, payload)?;
         Ok(SignedResponse {
-            signature: encode_hex(self.identity.sign(&message)?),
+            signature: encode_hex(self.signer.sign(&message)?),
             response: IntentMessage {
                 intent,
                 timestamp_ms,
@@ -178,7 +179,7 @@ mod tests {
     #[test]
     fn attestation_binds_context_public_key() {
         let fake = FakeAttestor::default();
-        let ctx = NautilusContext::new(EnclaveIdentity::from_seed([3u8; 32]), fake.clone());
+        let ctx = NautilusContext::with_signer(EnclaveIdentity::from_seed([3u8; 32]), fake.clone());
         let nonce = vec![1, 2, 3];
 
         let doc = ctx.attestation(Some(nonce.clone()), None).unwrap();
@@ -193,7 +194,7 @@ mod tests {
     #[test]
     fn attestation_rejects_oversized_nonce_before_attestor() {
         let fake = FakeAttestor::default();
-        let ctx = NautilusContext::new(EnclaveIdentity::from_seed([3u8; 32]), fake.clone());
+        let ctx = NautilusContext::with_signer(EnclaveIdentity::from_seed([3u8; 32]), fake.clone());
 
         let error = ctx.attestation(Some(vec![0; 513]), None).unwrap_err();
         assert!(matches!(
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn random_comes_from_attestor() {
         let fake = FakeAttestor::with_random_byte(0xab);
-        let ctx = NautilusContext::new(EnclaveIdentity::from_seed([4u8; 32]), fake);
+        let ctx = NautilusContext::with_signer(EnclaveIdentity::from_seed([4u8; 32]), fake);
         assert_eq!(ctx.random(4).unwrap(), vec![0xab; 4]);
     }
 }

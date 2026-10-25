@@ -455,7 +455,7 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
-    use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+    use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
     use http_body_util::BodyExt as _;
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -468,8 +468,8 @@ mod tests {
 
     use crate::testing::FakeAttestor;
     use crate::{
-        AttestationRequest, Attestor, EnclaveIdentity, Intent, NautilusContext, SignedResponse,
-        intent_message, verify_signed_response,
+        AttestationRequest, Attestor, EnclaveIdentity, Intent, NautilusContext, PublicKeyBytes,
+        SignatureBytes, SignedResponse, Signer, intent_message, verify_signed_response,
     };
 
     use super::*;
@@ -486,7 +486,7 @@ mod tests {
     }
 
     fn test_context() -> NautilusContext {
-        NautilusContext::new(
+        NautilusContext::with_signer(
             EnclaveIdentity::from_seed([9u8; 32]),
             FakeAttestor::default(),
         )
@@ -587,6 +587,30 @@ mod tests {
             Err(AttestationError::Backend(
                 "secret backend detail".to_owned(),
             ))
+        }
+    }
+
+    struct FixedKeySigner(SigningKey);
+
+    impl Signer for FixedKeySigner {
+        fn public_key(&self) -> PublicKeyBytes {
+            self.0.verifying_key().to_bytes()
+        }
+
+        fn sign(&self, message: &[u8]) -> Result<SignatureBytes, NautilusError> {
+            Ok(self.0.sign(message).to_bytes())
+        }
+    }
+
+    struct FailingSigner;
+
+    impl Signer for FailingSigner {
+        fn public_key(&self) -> PublicKeyBytes {
+            [7u8; 32]
+        }
+
+        fn sign(&self, _message: &[u8]) -> Result<SignatureBytes, NautilusError> {
+            Err(NautilusError::Crypto("secret signer detail".to_owned()))
         }
     }
 
@@ -692,7 +716,8 @@ mod tests {
 
     #[tokio::test]
     async fn attestor_failure_is_unavailable_without_details() {
-        let ctx = NautilusContext::new(EnclaveIdentity::from_seed([9u8; 32]), FailingAttestor);
+        let ctx =
+            NautilusContext::with_signer(EnclaveIdentity::from_seed([9u8; 32]), FailingAttestor);
         let app = router(ctx, ServerConfig::default(), sign_len);
         let response = call(app, "POST", "/attestation", r#"{"nonce":"01"}"#).await;
         assert_error(
@@ -835,6 +860,40 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         assert!(!String::from_utf8_lossy(&bytes).contains("secret detail"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({ "error": "internal_error", "message": "internal error" })
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_signer_serves_and_signs() {
+        let key = SigningKey::from_bytes(&[0x5au8; 32]);
+        let public_key = key.verifying_key().to_bytes();
+        assert_ne!(public_key, test_context().public_key());
+        let ctx = NautilusContext::with_signer(FixedKeySigner(key), FakeAttestor::default());
+        let app = router(ctx, ServerConfig::default(), sign_len);
+
+        let response = call(app.clone(), "GET", "/health_check", Body::empty()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["pk"], hex::encode(public_key));
+
+        let response = call(app, "POST", "/process_data", "abc").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let signed: SignedResponse<u64> =
+            serde_json::from_value(response_json(response).await).unwrap();
+        assert_eq!(signed.response.data, 3);
+        verify_signed_response(&public_key, Intent(0), &signed).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failing_signer_is_internal_error_without_details() {
+        let ctx = NautilusContext::with_signer(FailingSigner, FakeAttestor::default());
+        let app = router(ctx, ServerConfig::default(), sign_len);
+        let response = call(app, "POST", "/process_data", "abc").await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(!String::from_utf8_lossy(&bytes).contains("secret signer detail"));
         assert_eq!(
             serde_json::from_slice::<Value>(&bytes).unwrap(),
             json!({ "error": "internal_error", "message": "internal error" })

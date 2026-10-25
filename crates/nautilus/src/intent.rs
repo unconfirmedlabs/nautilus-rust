@@ -112,7 +112,7 @@ mod tests {
     }
 
     fn context() -> NautilusContext {
-        NautilusContext::new(
+        NautilusContext::with_signer(
             EnclaveIdentity::from_seed([5u8; 32]),
             FakeAttestor::default(),
         )
