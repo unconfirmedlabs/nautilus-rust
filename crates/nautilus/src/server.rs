@@ -14,6 +14,7 @@ use axum::{
 };
 use http_body_util::LengthLimitError;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::{
     net::TcpListener,
     sync::{OwnedSemaphorePermit, Semaphore},
@@ -33,11 +34,13 @@ pub const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Server limits; peak buffered request memory is about `max_concurrent * max_body_bytes`.
+///
+/// Every limit must be non-zero; [`ServerConfig::validate`] rejects a zero instead of clamping it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
     /// Maximum accepted request body size; defaults to [`DEFAULT_MAX_BODY_BYTES`] (8 MiB).
     pub max_body_bytes: usize,
-    /// Maximum in-flight `/attestation` and `/process_data` requests; defaults to the available parallelism, or 1 if unknown.
+    /// Maximum in-flight `/attestation` and `/process_data` requests; defaults to the available parallelism when `default()` runs, or 1 if unknown.
     pub max_concurrent: usize,
     /// Per-request deadline; defaults to [`DEFAULT_REQUEST_TIMEOUT`] (30 s).
     pub request_timeout: Duration,
@@ -54,6 +57,29 @@ impl Default for ServerConfig {
             allow_unnonced_attestation: false,
         }
     }
+}
+
+impl ServerConfig {
+    /// Fails if any limit is zero, which would make the server reject every request.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let zero = [
+            ("max_body_bytes", self.max_body_bytes == 0),
+            ("max_concurrent", self.max_concurrent == 0),
+            ("request_timeout", self.request_timeout.is_zero()),
+        ];
+        match zero.into_iter().find(|&(_, is_zero)| is_zero) {
+            Some((field, _)) => Err(ConfigError::Zero(field)),
+            None => Ok(()),
+        }
+    }
+}
+
+/// An invalid [`ServerConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ConfigError {
+    /// The named limit is zero.
+    #[error("ServerConfig::{0} must be greater than zero")]
+    Zero(&'static str),
 }
 
 /// `/health_check` response body.
@@ -217,8 +243,12 @@ impl ServerState {
     }
 }
 
-/// Builds a Nautilus router whose `/process_data` handler runs on the blocking thread pool.
-pub fn router<F, T>(ctx: NautilusContext, config: ServerConfig, handler: F) -> Router
+/// Builds a Nautilus router whose `/process_data` handler runs on the blocking thread pool; fails on an invalid `config`.
+pub fn router<F, T>(
+    ctx: NautilusContext,
+    config: ServerConfig,
+    handler: F,
+) -> Result<Router, ConfigError>
 where
     F: Fn(Bytes, &NautilusContext) -> Result<T, NautilusError> + Send + Sync + 'static,
     T: Serialize + Send + 'static,
@@ -246,8 +276,12 @@ where
     )
 }
 
-/// Builds a Nautilus router whose `/process_data` handler is an async function run on the runtime.
-pub fn router_async<F, Fut, T>(ctx: NautilusContext, config: ServerConfig, handler: F) -> Router
+/// Builds a Nautilus router whose `/process_data` handler is an async function run on the runtime; fails on an invalid `config`.
+pub fn router_async<F, Fut, T>(
+    ctx: NautilusContext,
+    config: ServerConfig,
+    handler: F,
+) -> Result<Router, ConfigError>
 where
     F: Fn(Bytes, NautilusContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<T, NautilusError>> + Send + 'static,
@@ -271,7 +305,12 @@ where
     )
 }
 
-fn build_router(ctx: NautilusContext, config: ServerConfig, handler: Handler) -> Router {
+fn build_router(
+    ctx: NautilusContext,
+    config: ServerConfig,
+    handler: Handler,
+) -> Result<Router, ConfigError> {
+    config.validate()?;
     let attestation = if config.allow_unnonced_attestation {
         get(get_attestation).post(post_attestation)
     } else {
@@ -287,7 +326,7 @@ fn build_router(ctx: NautilusContext, config: ServerConfig, handler: Handler) ->
         handler,
     });
 
-    Router::new()
+    Ok(Router::new()
         .route("/health_check", get(health_check))
         .route("/attestation", attestation)
         .route("/process_data", post(process_data))
@@ -296,7 +335,7 @@ fn build_router(ctx: NautilusContext, config: ServerConfig, handler: Handler) ->
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(handle_middleware_error))
                 .layer(TimeoutLayer::new(timeout)),
-        )
+        ))
 }
 
 /// Binds `addr` and serves `app` until SIGTERM or Ctrl-C, then drains in-flight requests.
@@ -504,11 +543,11 @@ mod tests {
     }
 
     fn test_app() -> Router {
-        router(test_context(), small_config(), sign_len)
+        router(test_context(), small_config(), sign_len).unwrap()
     }
 
     fn default_app() -> Router {
-        router(test_context(), ServerConfig::default(), sign_len)
+        router(test_context(), ServerConfig::default(), sign_len).unwrap()
     }
 
     fn unnonced_app() -> Router {
@@ -520,6 +559,7 @@ mod tests {
             },
             sign_len,
         )
+        .unwrap()
     }
 
     async fn call(app: Router, method: &str, uri: &str, body: impl Into<Body>) -> Response {
@@ -566,7 +606,8 @@ mod tests {
             let _ = started_tx.send(());
             let _ = release_rx.lock().unwrap().recv();
             Ok(bytes.len() as u64)
-        });
+        })
+        .unwrap();
         Gate {
             app,
             started,
@@ -625,6 +666,49 @@ mod tests {
         assert!(config.max_concurrent >= 1);
         assert_eq!(config.request_timeout, Duration::from_secs(30));
         assert!(!config.allow_unnonced_attestation);
+    }
+
+    #[test]
+    fn zero_limits_are_rejected() {
+        let cases = [
+            (
+                ServerConfig {
+                    max_body_bytes: 0,
+                    ..ServerConfig::default()
+                },
+                "max_body_bytes",
+            ),
+            (
+                ServerConfig {
+                    max_concurrent: 0,
+                    ..ServerConfig::default()
+                },
+                "max_concurrent",
+            ),
+            (
+                ServerConfig {
+                    request_timeout: Duration::ZERO,
+                    ..ServerConfig::default()
+                },
+                "request_timeout",
+            ),
+        ];
+        for (config, field) in cases {
+            assert_eq!(config.validate(), Err(ConfigError::Zero(field)));
+            assert_eq!(
+                router(test_context(), config.clone(), sign_len)
+                    .unwrap_err()
+                    .to_string(),
+                format!("ServerConfig::{field} must be greater than zero")
+            );
+            assert!(
+                router_async(test_context(), config, |bytes, ctx| async move {
+                    sign_len(bytes, &ctx)
+                })
+                .is_err()
+            );
+        }
+        ServerConfig::default().validate().unwrap();
     }
 
     #[test]
@@ -722,7 +806,7 @@ mod tests {
     async fn attestor_failure_is_unavailable_without_details() {
         let ctx =
             NautilusContext::with_signer(EnclaveIdentity::from_seed([9u8; 32]), FailingAttestor);
-        let app = router(ctx, ServerConfig::default(), sign_len);
+        let app = router(ctx, ServerConfig::default(), sign_len).unwrap();
         let response = call(app, "POST", "/attestation", r#"{"nonce":"01"}"#).await;
         assert_error(
             response,
@@ -746,7 +830,8 @@ mod tests {
     async fn router_async_calls_handler() {
         let app = router_async(test_context(), small_config(), |bytes, ctx| async move {
             sign_len(bytes, &ctx)
-        });
+        })
+        .unwrap();
         let response = call(app, "POST", "/process_data", "abc").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response_json(response).await["response"]["data"], 3);
@@ -771,7 +856,7 @@ mod tests {
         )
         .unwrap();
 
-        let app = router(ctx.clone(), ServerConfig::default(), sign_body);
+        let app = router(ctx.clone(), ServerConfig::default(), sign_body).unwrap();
         let response = call(app, "POST", "/process_data", forged.clone()).await;
         assert_eq!(response.status(), StatusCode::OK);
 
@@ -845,7 +930,8 @@ mod tests {
     async fn application_error_returns_app_message() {
         let app = router(test_context(), ServerConfig::default(), |_, _| {
             Err::<u64, _>(NautilusError::application("payload is not a song"))
-        });
+        })
+        .unwrap();
         let response = call(app, "POST", "/process_data", "abc").await;
         assert_error(
             response,
@@ -859,7 +945,8 @@ mod tests {
     async fn internal_error_hides_details() {
         let app = router(test_context(), ServerConfig::default(), |_, _| {
             Err::<u64, _>(NautilusError::Crypto("secret detail".to_owned()))
-        });
+        })
+        .unwrap();
         let response = call(app, "POST", "/process_data", "abc").await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -876,7 +963,7 @@ mod tests {
         let public_key = key.verifying_key().to_bytes();
         assert_ne!(public_key, test_context().public_key());
         let ctx = NautilusContext::with_signer(FixedKeySigner(key), FakeAttestor::default());
-        let app = router(ctx, ServerConfig::default(), sign_len);
+        let app = router(ctx, ServerConfig::default(), sign_len).unwrap();
 
         let response = call(app.clone(), "GET", "/health_check", Body::empty()).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -893,7 +980,7 @@ mod tests {
     #[tokio::test]
     async fn failing_signer_is_internal_error_without_details() {
         let ctx = NautilusContext::with_signer(FailingSigner, FakeAttestor::default());
-        let app = router(ctx, ServerConfig::default(), sign_len);
+        let app = router(ctx, ServerConfig::default(), sign_len).unwrap();
         let response = call(app, "POST", "/process_data", "abc").await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -972,7 +1059,8 @@ mod tests {
         let app = router_async(test_context(), config, |_, _| async {
             tokio::time::sleep(Duration::from_secs(5)).await;
             Ok(0u64)
-        });
+        })
+        .unwrap();
         let response = call(app, "POST", "/process_data", "abc").await;
         assert_error(response, ErrorCode::RequestTimeout, "request timed out").await;
     }

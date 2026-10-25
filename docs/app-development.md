@@ -99,6 +99,7 @@ It checks the intent, re-encodes the BCS message and verifies Ed25519. Freshness
 - `router(ctx, config, handler)`: `handler: Fn(Bytes, &NautilusContext) -> Result<T, NautilusError>`, run on the blocking thread pool, so CPU-heavy work does not stall the runtime.
 - `router_async(ctx, config, handler)`: `handler: Fn(Bytes, NautilusContext) -> impl Future<Output = Result<T, NautilusError>>`, run on the runtime. Do not block in it.
 - `T: Serialize` is returned as JSON.
+- Both return `Result<Router, ConfigError>` and fail if `config` is invalid.
 - `serve(addr, app)` binds and serves until SIGTERM or Ctrl-C, then drains in-flight requests. `serve_with_shutdown(listener, app, signal)` takes your own listener and shutdown future.
 
 ### ServerConfig
@@ -121,6 +122,8 @@ let config = ServerConfig {
     ..ServerConfig::default()
 };
 ```
+
+Every limit must be non-zero. `ServerConfig::validate()` returns `ConfigError::Zero(field)` for a zero instead of clamping it, and `router` / `router_async` call it. `max_concurrent` defaults to the available parallelism at the moment `ServerConfig::default()` runs, so call it on the machine that serves, not in a build script.
 
 A blocking handler that times out keeps its concurrency slot until it actually returns, so a stuck handler cannot be replaced by unbounded new work.
 
