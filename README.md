@@ -125,6 +125,8 @@ Errors are JSON `{"error": "<code>", "message": "..."}`:
 | --- | --- | --- |
 | `invalid_request` | 400 | framework validation failed: hex, JSON, missing nonce, attestation bounds |
 | `body_read_failed` | 400 | the request body could not be read |
+| `not_found` | 404 | no route matches the path |
+| `method_not_allowed` | 405 | the route does not accept the method |
 | `request_timeout` | 408 | `request_timeout` elapsed |
 | `body_too_large` | 413 | body exceeds `max_body_bytes` |
 | `application_error` | 422 | handler returned `NautilusError::Application`; `message` is the app's |

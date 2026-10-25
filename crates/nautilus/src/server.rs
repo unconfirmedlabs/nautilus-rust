@@ -108,6 +108,10 @@ pub enum ErrorCode {
     InvalidRequest,
     /// 400: the request body could not be read.
     BodyReadFailed,
+    /// 404: no route matches the path.
+    NotFound,
+    /// 405: the route does not accept the method.
+    MethodNotAllowed,
     /// 408: the request exceeded the configured deadline.
     RequestTimeout,
     /// 413: the request body exceeded the configured limit.
@@ -128,6 +132,8 @@ impl ErrorCode {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::BodyReadFailed => "body_read_failed",
+            Self::NotFound => "not_found",
+            Self::MethodNotAllowed => "method_not_allowed",
             Self::RequestTimeout => "request_timeout",
             Self::BodyTooLarge => "body_too_large",
             Self::ApplicationError => "application_error",
@@ -141,6 +147,8 @@ impl ErrorCode {
     pub fn status(self) -> StatusCode {
         match self {
             Self::InvalidRequest | Self::BodyReadFailed => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::ApplicationError => StatusCode::UNPROCESSABLE_ENTITY,
@@ -154,6 +162,8 @@ impl ErrorCode {
         match self {
             Self::InvalidRequest => "invalid request",
             Self::BodyReadFailed => "failed to read request body",
+            Self::NotFound => "no such route",
+            Self::MethodNotAllowed => "method not allowed",
             Self::RequestTimeout => "request timed out",
             Self::BodyTooLarge => "request body too large",
             Self::ApplicationError => "application error",
@@ -330,6 +340,8 @@ fn build_router(
         .route("/health_check", get(health_check))
         .route("/attestation", attestation)
         .route("/process_data", post(process_data))
+        .method_not_allowed_fallback(|| async { ApiError::new(ErrorCode::MethodNotAllowed) })
+        .fallback(|| async { ApiError::new(ErrorCode::NotFound) })
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -716,6 +728,8 @@ mod tests {
         for code in [
             ErrorCode::InvalidRequest,
             ErrorCode::BodyReadFailed,
+            ErrorCode::NotFound,
+            ErrorCode::MethodNotAllowed,
             ErrorCode::RequestTimeout,
             ErrorCode::BodyTooLarge,
             ErrorCode::ApplicationError,
@@ -737,6 +751,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_route_and_method_are_json_errors() {
+        let response = call(default_app(), "POST", "/nope", Body::empty()).await;
+        assert_error(response, ErrorCode::NotFound, "no such route").await;
+        let response = call(default_app(), "GET", "/process_data", Body::empty()).await;
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        assert_error(response, ErrorCode::MethodNotAllowed, "method not allowed").await;
+        let response = call(default_app(), "POST", "/health_check", Body::empty()).await;
+        assert_error(response, ErrorCode::MethodNotAllowed, "method not allowed").await;
+    }
+
+    #[tokio::test]
     async fn attestation_accepts_hex_nonce() {
         let response = call(
             default_app(),
@@ -755,7 +780,7 @@ mod tests {
     #[tokio::test]
     async fn unnonced_attestation_is_rejected_by_default() {
         let response = call(default_app(), "GET", "/attestation", Body::empty()).await;
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_error(response, ErrorCode::MethodNotAllowed, "method not allowed").await;
         for body in ["{}", r#"{"nonce":""}"#, r#"{"user_data":"0x01"}"#] {
             let response = call(default_app(), "POST", "/attestation", body).await;
             assert_error(response, ErrorCode::InvalidRequest, "nonce is required").await;
