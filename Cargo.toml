@@ -25,6 +25,8 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 futures-util = { version = "0.3", default-features = false }
 hex = "0.4"
 http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["server", "server-graceful", "tokio"] }
 libc = "0.2"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

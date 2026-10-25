@@ -1,6 +1,6 @@
 use std::{
-    error::Error as StdError, future::Future, io, iter, net::SocketAddr, panic::AssertUnwindSafe,
-    pin::Pin, sync::Arc, thread, time::Duration,
+    error::Error as StdError, future::Future, iter, panic::AssertUnwindSafe, pin::Pin, sync::Arc,
+    thread, time::Duration,
 };
 
 use axum::{
@@ -18,7 +18,6 @@ use http_body_util::LengthLimitError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
-    net::TcpListener,
     sync::{OwnedSemaphorePermit, Semaphore},
     task::{JoinError, spawn_blocking},
 };
@@ -38,6 +37,15 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default deadline for receiving a request body (10 s).
 pub const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Default deadline for receiving a request's headers, including the wait for the next request on a kept-alive connection (10 s).
+pub const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default time a connection may go without I/O while no request is being handled (30 s).
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default maximum number of open connections (64).
+pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
+
 /// Server limits; peak buffered request memory is about `max_concurrent * max_body_bytes`.
 ///
 /// Every limit must be non-zero; [`ServerConfig::validate`] rejects a zero instead of clamping it.
@@ -51,6 +59,12 @@ pub struct ServerConfig {
     pub request_timeout: Duration,
     /// Deadline for receiving the body, which holds a concurrency slot; defaults to [`DEFAULT_BODY_READ_TIMEOUT`] (10 s).
     pub body_read_timeout: Duration,
+    /// Maximum open connections, enforced by [`serve`](crate::serve) on accept; defaults to [`DEFAULT_MAX_CONNECTIONS`] (64).
+    pub max_connections: usize,
+    /// Deadline for a request's headers, which also closes idle kept-alive connections; defaults to [`DEFAULT_HEADER_READ_TIMEOUT`] (10 s).
+    pub header_read_timeout: Duration,
+    /// Closes a connection with no I/O for this long while no request is in a handler; defaults to [`DEFAULT_IDLE_TIMEOUT`] (30 s).
+    pub idle_timeout: Duration,
     /// Serves `GET /attestation` and nonce-less `POST /attestation` when true; defaults to false.
     pub allow_unnonced_attestation: bool,
 }
@@ -62,6 +76,9 @@ impl Default for ServerConfig {
             max_concurrent: thread::available_parallelism().map_or(1, usize::from),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
             allow_unnonced_attestation: false,
         }
     }
@@ -75,6 +92,9 @@ impl ServerConfig {
             ("max_concurrent", self.max_concurrent == 0),
             ("request_timeout", self.request_timeout.is_zero()),
             ("body_read_timeout", self.body_read_timeout.is_zero()),
+            ("max_connections", self.max_connections == 0),
+            ("header_read_timeout", self.header_read_timeout.is_zero()),
+            ("idle_timeout", self.idle_timeout.is_zero()),
         ];
         match zero.into_iter().find(|&(_, is_zero)| is_zero) {
             Some((field, _)) => Err(ConfigError::Zero(field)),
@@ -364,51 +384,6 @@ fn build_router(
         ))
 }
 
-/// Binds `addr` and serves `app` until SIGTERM or Ctrl-C, then drains in-flight requests.
-pub async fn serve(addr: SocketAddr, app: Router) -> io::Result<()> {
-    serve_with_shutdown(TcpListener::bind(addr).await?, app, shutdown_signal()).await
-}
-
-/// Serves `app` on `listener` until `shutdown` completes, then drains in-flight requests.
-pub async fn serve_with_shutdown(
-    listener: TcpListener,
-    app: Router,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> io::Result<()> {
-    tracing::info!(address = %listener.local_addr()?, "nautilus server listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::warn!(%error, "failed to listen for ctrl-c");
-            std::future::pending::<()>().await;
-        }
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to listen for SIGTERM");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
-    tracing::info!("shutdown signal received, draining requests");
-}
-
 async fn handle_middleware_error(error: BoxError) -> ApiError {
     if error.is::<Elapsed>() {
         ApiError::new(ErrorCode::RequestTimeout)
@@ -535,7 +510,10 @@ fn json_response<T: Serialize>(value: &T) -> Result<Response, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, mpsc};
+    use std::{
+        io,
+        sync::{Mutex, mpsc},
+    };
 
     use axum::{
         body::Body,
@@ -547,7 +525,7 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},
-        net::TcpStream,
+        net::{TcpListener, TcpStream},
         sync::mpsc::{UnboundedReceiver, unbounded_channel},
     };
     use tower::ServiceExt as _;
@@ -709,6 +687,9 @@ mod tests {
         assert!(config.max_concurrent >= 1);
         assert_eq!(config.request_timeout, Duration::from_secs(30));
         assert_eq!(config.body_read_timeout, Duration::from_secs(10));
+        assert_eq!(config.max_connections, 64);
+        assert_eq!(config.header_read_timeout, Duration::from_secs(10));
+        assert_eq!(config.idle_timeout, Duration::from_secs(30));
         assert!(!config.allow_unnonced_attestation);
     }
 
@@ -742,6 +723,27 @@ mod tests {
                     ..ServerConfig::default()
                 },
                 "body_read_timeout",
+            ),
+            (
+                ServerConfig {
+                    max_connections: 0,
+                    ..ServerConfig::default()
+                },
+                "max_connections",
+            ),
+            (
+                ServerConfig {
+                    header_read_timeout: Duration::ZERO,
+                    ..ServerConfig::default()
+                },
+                "header_read_timeout",
+            ),
+            (
+                ServerConfig {
+                    idle_timeout: Duration::ZERO,
+                    ..ServerConfig::default()
+                },
+                "idle_timeout",
             ),
         ];
         for (config, field) in cases {
@@ -1210,9 +1212,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let server = tokio::spawn(serve_with_shutdown(listener, gate.app, async {
-            let _ = shutdown_rx.await;
-        }));
+        let server = tokio::spawn(crate::serve_with_shutdown(
+            listener,
+            gate.app,
+            ServerConfig::default(),
+            async {
+                let _ = shutdown_rx.await;
+            },
+        ));
         let client = tokio::spawn(async move {
             let mut stream = TcpStream::connect(addr).await.unwrap();
             stream

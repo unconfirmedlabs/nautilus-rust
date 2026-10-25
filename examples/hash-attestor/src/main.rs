@@ -34,8 +34,9 @@ async fn main() -> anyhow::Result<()> {
     let ctx = NautilusContext::development();
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
-    let app = nautilus::router(ctx, ServerConfig::default(), process_data)?;
-    nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
+    let config = ServerConfig::default();
+    let app = nautilus::router(ctx, config.clone(), process_data)?;
+    nautilus::serve("127.0.0.1:3000".parse()?, app, config).await?;
     Ok(())
 }
 

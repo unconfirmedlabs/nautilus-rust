@@ -100,7 +100,9 @@ It checks the intent, re-encodes the BCS message and verifies Ed25519. Freshness
 - `router_async(ctx, config, handler)`: `handler: Fn(Bytes, NautilusContext) -> impl Future<Output = Result<T, NautilusError>>`, run on the runtime. Do not block in it.
 - `T: Serialize` is returned as JSON.
 - Both return `Result<Router, ConfigError>` and fail if `config` is invalid.
-- `serve(addr, app)` binds and serves until SIGTERM or Ctrl-C, then drains in-flight requests. `serve_with_shutdown(listener, app, signal)` takes your own listener and shutdown future.
+- `serve(addr, app, config)` binds TCP and serves until SIGTERM or Ctrl-C, then drains in-flight requests and closes idle connections. `serve_with_shutdown(listener, app, config, signal)` takes any `axum::serve::Listener` (for example a `tokio::net::TcpListener`) and your own shutdown future.
+- Pass the same `ServerConfig` to the router and to `serve`: the router applies the request limits, `serve` the connection limits. Both validate it; `serve` returns `io::ErrorKind::InvalidInput` for an invalid one and logs the effective config at `info` when it starts.
+- The server speaks HTTP/1.1 with keep-alive; HTTP/2 is not served.
 
 ### ServerConfig
 
@@ -110,6 +112,9 @@ It checks the intent, re-encodes the BCS message and verifies Ed25519. Freshness
 | `max_concurrent` | available parallelism, or 1 | in-flight `/attestation` + `/process_data`; extra requests get 429 |
 | `request_timeout` | 30 s (`DEFAULT_REQUEST_TIMEOUT`) | slower requests get 408 |
 | `body_read_timeout` | 10 s (`DEFAULT_BODY_READ_TIMEOUT`) | a body that has not fully arrived by then gets 408 |
+| `max_connections` | 64 (`DEFAULT_MAX_CONNECTIONS`) | further connections are accepted and closed at once, before any HTTP work |
+| `header_read_timeout` | 10 s (`DEFAULT_HEADER_READ_TIMEOUT`) | a connection that has not sent complete headers by then, including a kept-alive one waiting for its next request, is closed |
+| `idle_timeout` | 30 s (`DEFAULT_IDLE_TIMEOUT`) | a connection with no I/O for this long while no request is in a handler, for example a client that stops reading its response, is closed |
 | `allow_unnonced_attestation` | false | enables `GET /attestation` and nonce-less `POST` |
 
 ```rust
@@ -120,6 +125,7 @@ let config = ServerConfig {
     max_body_bytes: 64 * 1024 * 1024,
     max_concurrent: 2,
     request_timeout: Duration::from_secs(120),
+    body_read_timeout: Duration::from_secs(60),
     ..ServerConfig::default()
 };
 ```
@@ -136,6 +142,7 @@ The initramfs, including your binary, lives in enclave RAM. Size enclave memory 
 
 - the unpacked initramfs (`out/rootfs.cpio` is its gzip-compressed form),
 - plus `max_concurrent * max_body_bytes` of buffered bodies,
+- plus up to `max_connections` connection buffers (headers are limited by hyper's defaults),
 - plus the handler's working set per request.
 
 `nitro-cli` reserves enclave resources from `/etc/nitro_enclaves/allocator.yaml` (`memory_mib`, `cpu_count`; default 512 MiB and 2 vCPUs). `run-enclave --memory` must not exceed that reservation, and on SMT parents `--cpu-count` must be even. `make run-eif` uses `--cpu-count 2 --memory 512M`.

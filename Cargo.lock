@@ -473,6 +473,8 @@ dependencies = [
  "futures-util",
  "hex",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "nautilus-nsm",
  "rand",
  "serde",
