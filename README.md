@@ -143,7 +143,7 @@ Internal and attestation error details are logged, never returned.
 
 ## Security
 
-- Fail-closed identity. `from_runtime()` opens `/dev/nsm`, mixes 32 bytes of NSM entropy into the per-boot key, and errors if the device is missing. It never falls back to a development identity.
+- Fail-closed identity. `from_runtime()` opens `/dev/nsm`, mixes 32 bytes of NSM entropy into the per-boot key, attests that key once as a self-check, and errors if the device is missing or the NSM fails. It never falls back to a development identity.
 - `test-utils` is off by default. It gates `development()` (seed `[42; 32]`, public), `FakeAttestor`, `EnclaveIdentity::from_seed` and `sign_intent_at`. `Containerfile.eif` runs `scripts/assert-no-test-utils.sh` and refuses to build an enclave package that enables it.
 - Intent domain separation. Every signature covers BCS `(intent: u8, timestamp_ms: u64, payload)`. There is no API that signs raw bytes, so a client cannot get an arbitrary message signed. Give each message kind its own intent value.
 - Timestamps are enclave-claimed. `sign_intent` stamps `now_ms()`, the enclave's system clock, which the host controls. It is not attested time.

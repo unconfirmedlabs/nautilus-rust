@@ -32,17 +32,17 @@ impl NautilusContext {
         ctx
     }
 
-    /// Creates the production context: opens `/dev/nsm` and generates a per-boot identity mixed with NSM entropy.
+    /// Creates the production context: opens `/dev/nsm`, generates a per-boot identity mixed with NSM entropy, and fails unless the NSM produces an attestation for it.
     pub fn from_runtime() -> Result<Self, NautilusError> {
         Self::with_entropy_from(NsmAttestor::open()?)
     }
 
     fn with_entropy_from(attestor: impl Attestor) -> Result<Self, NautilusError> {
         let entropy = Zeroizing::new(attestor.random(32)?);
-        Ok(Self::with_signer(
-            EnclaveIdentity::generate_with_entropy(&entropy),
-            attestor,
-        ))
+        let ctx = Self::with_signer(EnclaveIdentity::generate_with_entropy(&entropy), attestor);
+        ctx.attestation(None, None)?;
+        tracing::info!("attestation self-check passed");
+        Ok(ctx)
     }
 
     /// Creates a local development context with a public deterministic identity and fake attestation.
@@ -170,6 +170,43 @@ mod tests {
         let b = NautilusContext::with_entropy_from(FakeAttestor::default()).unwrap();
         assert_eq!(a.attestor_name(), "fake");
         assert_ne!(a.public_key(), b.public_key());
+    }
+
+    #[test]
+    fn boot_fails_when_attestation_fails() {
+        struct RandomOnly;
+
+        impl Attestor for RandomOnly {
+            fn name(&self) -> &'static str {
+                "random-only"
+            }
+
+            fn attest(&self, _request: AttestationRequest) -> Result<Vec<u8>, AttestationError> {
+                Err(AttestationError::Backend("attestation rejected".to_owned()))
+            }
+
+            fn random(&self, len: usize) -> Result<Vec<u8>, AttestationError> {
+                Ok(vec![1; len])
+            }
+        }
+
+        let error = NautilusContext::with_entropy_from(RandomOnly)
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            NautilusError::Attestation(AttestationError::Backend(_))
+        ));
+    }
+
+    #[test]
+    fn boot_self_check_attests_the_new_key() {
+        let fake = FakeAttestor::default();
+        let ctx = NautilusContext::with_entropy_from(fake.clone()).unwrap();
+        let requests = fake.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].public_key, ctx.public_key().to_vec());
+        assert_eq!(requests[0].nonce, None);
     }
 
     #[test]

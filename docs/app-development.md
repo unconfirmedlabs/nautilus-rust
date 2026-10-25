@@ -6,7 +6,7 @@ An app is its own crate that depends on `nautilus` and supplies one `/process_da
 
 `NautilusContext` holds a `Signer` and an `Attestor` behind `Arc`s and is cheap to clone.
 
-- `NautilusContext::from_runtime()`: production. Opens `/dev/nsm` (`NsmAttestor`), mixes 32 bytes of NSM entropy into a fresh per-boot Ed25519 key, and errors if the device is missing.
+- `NautilusContext::from_runtime()`: production. Opens `/dev/nsm` (`NsmAttestor`), mixes 32 bytes of NSM entropy into a fresh per-boot Ed25519 key, requests one attestation document for that key as a self-check, and errors if the device is missing or either NSM call fails. A misconfigured enclave therefore fails at boot, in the console log, instead of answering the first client with 503.
 - `NautilusContext::development()` (feature `test-utils`): seed `[42; 32]` and `testing::FakeAttestor`. The key is public; it logs a warning and must never be deployed.
 - `NautilusContext::with_signer(signer, attestor)`: any `Signer` with any `Attestor`.
 

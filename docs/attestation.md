@@ -4,7 +4,7 @@ The enclave generates an Ed25519 key at boot and asks the Nitro Secure Module (N
 
 ## Flow
 
-1. `NautilusContext::from_runtime()` opens `/dev/nsm` through `NsmAttestor` and generates the key from OS randomness mixed with 32 bytes of NSM entropy. It errors if the device is missing and never falls back to a development identity.
+1. `NautilusContext::from_runtime()` opens `/dev/nsm` through `NsmAttestor` and generates the key from OS randomness mixed with 32 bytes of NSM entropy. It then requests one attestation document for the new key as a self-check. It errors if the device is missing or either call fails, and never falls back to a development identity.
 2. The verifier sends `POST /attestation` with a fresh random nonce.
 3. `NautilusContext::attestation(nonce, user_data)` validates the request and calls the NSM. The document is returned as hex: `{"attestation": "<hex>"}`.
 4. The verifier checks the COSE signature, the certificate chain to the AWS root, the PCRs, the nonce, and that `public_key` equals `GET /health_check`'s `pk`.
