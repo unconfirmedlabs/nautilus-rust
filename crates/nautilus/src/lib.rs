@@ -23,6 +23,8 @@ pub use intent::{
     Intent, IntentMessage, SignedResponse, intent_message, now_ms, verify_signed_response,
 };
 pub use nsm::NsmAttestor;
+#[cfg(feature = "vsock")]
+pub use serve::{VsockListener, serve_vsock};
 pub use serve::{serve, serve_with_shutdown};
 pub use server::{
     AttestationBody, ConfigError, DEFAULT_BODY_READ_TIMEOUT, DEFAULT_HEADER_READ_TIMEOUT,

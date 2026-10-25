@@ -10,6 +10,7 @@ version.workspace = true
 
 [features]
 test-utils = []
+vsock = ["dep:tokio-vsock"]
 
 [dependencies]
 axum.workspace = true
@@ -27,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-vsock = { workspace = true, optional = true }
 tower.workspace = true
 tracing.workspace = true
 

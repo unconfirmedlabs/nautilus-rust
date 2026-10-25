@@ -6,7 +6,7 @@ On-chain verification lives in [Kagi](https://github.com/unconfirmedlabs/kagi), 
 
 ## Crates
 
-- `nautilus`: the app-facing crate, `#![forbid(unsafe_code)]`. `NautilusContext` (identity, signing, attestation), `NsmAttestor` and `NautilusContext::from_runtime()` for `/dev/nsm`, the `Signer` and `Attestor` traits, `router` / `router_async` / `serve`, and `contract` (Move-compatible BCS types and golden vectors). Test fakes are behind the `test-utils` feature.
+- `nautilus`: the app-facing crate, `#![forbid(unsafe_code)]`. `NautilusContext` (identity, signing, attestation), `NsmAttestor` and `NautilusContext::from_runtime()` for `/dev/nsm`, the `Signer` and `Attestor` traits, `router` / `router_async` / `serve`, and `contract` (Move-compatible BCS types and golden vectors). The AF_VSOCK listener (`serve_vsock`, `VsockListener`) is behind the `vsock` feature and test fakes behind `test-utils`.
 - `nautilus-nsm`: the standalone `/dev/nsm` driver (CBOR requests, ioctl). It does not depend on `nautilus` and holds the only `unsafe` code. Apps do not need it directly; `nautilus` depends on it.
 
 ```text
@@ -33,7 +33,7 @@ curl -s -X POST --data-binary "hello" http://127.0.0.1:3000/process_data
 curl -s -X POST -d '{"nonce":"0x010203"}' http://127.0.0.1:3000/attestation
 ```
 
-Without `--features test-utils` the examples call `NautilusContext::from_runtime()`, which fails unless `/dev/nsm` exists.
+Without `--features test-utils` the examples call `NautilusContext::from_runtime()`, which fails unless `/dev/nsm` exists, and serve on vsock port 3000 instead of TCP.
 
 Check suite:
 
@@ -55,7 +55,7 @@ test-utils = ["nautilus/test-utils"]
 [dependencies]
 anyhow = "1"
 axum = "0.8"
-nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust", tag = "v0.2.0" }
+nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust", tag = "v0.2.0", features = ["vsock"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -102,12 +102,15 @@ async fn main() -> anyhow::Result<()> {
     let ctx = NautilusContext::from_runtime()?;
     let config = ServerConfig::default();
     let app = nautilus::router(ctx, config.clone(), process_data)?;
+    #[cfg(feature = "test-utils")]
     nautilus::serve("127.0.0.1:3000".parse()?, app, config).await?;
+    #[cfg(not(feature = "test-utils"))]
+    nautilus::serve_vsock(3000, app, config).await?;
     Ok(())
 }
 ```
 
-The handler runs on the blocking thread pool. The matching Move struct is `HashAttestation { digest: vector<u8>, length: u64 }`; see [docs/contract.md](docs/contract.md) for the type mapping. `Containerfile.eif` builds a package of this workspace, so add the app as a workspace member and run `make eif ENCLAVE_PACKAGE=my-enclave-app ENCLAVE_BIN=my-enclave-app`.
+The handler runs on the blocking thread pool. The local development build serves TCP on `127.0.0.1:3000`; the enclave build serves vsock port 3000. The matching Move struct is `HashAttestation { digest: vector<u8>, length: u64 }`; see [docs/contract.md](docs/contract.md) for the type mapping. `Containerfile.eif` builds a package of this workspace, so add the app as a workspace member and run `make eif ENCLAVE_PACKAGE=my-enclave-app ENCLAVE_BIN=my-enclave-app`.
 
 ## Routes
 
@@ -150,7 +153,7 @@ What an attestation does and does not prove: [docs/attestation.md](docs/attestat
 
 ## Host Side
 
-Enclaves have no network; the only I/O is vsock to the parent instance. `eif/run.sh` bridges enclave vsock port 3000 to the app on `127.0.0.1:3000` with `socat`. Parent-side orchestration, proxying and outbound networking are out of scope here.
+Enclaves have no network; the only I/O is vsock to the parent instance. With the `vsock` feature, `nautilus::serve_vsock(3000, app, config)` serves the router directly on enclave vsock port 3000 under the same connection limits as TCP; the image runs no bridge process. The parent still has to forward clients to the enclave, for example `socat TCP-LISTEN:3000,reuseaddr,fork,max-children=256 VSOCK-CONNECT:16:3000` for the CID `make run-eif` uses. Outbound calls need a bridge on both sides. See [docs/host-bridge.md](docs/host-bridge.md).
 
 [Argonaut](https://github.com/miraicloud/argonaut) is a separate Go companion binary for Nitro vsock bridging, config delivery and NSM proxying, maintained under the miraicloud organization. It is not part of this repository.
 
@@ -159,7 +162,7 @@ Enclaves have no network; the only I/O is vsock to the parent instance. `eif/run
 - `rust-toolchain.toml` pins Rust 1.94.1; `Cargo.lock` is committed and CI uses `--locked`.
 - Release builds use one codegen unit, fat LTO and stripped symbols, and unwind on panic so a panicking handler returns 500 instead of ending the enclave. No crate has a `build.rs`.
 - `Containerfile.eif` pins StageX images by digest, builds for `x86_64-unknown-linux-musl`, normalizes initramfs timestamps and runs `eif_build`. `make eif` writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
-- The StageX pins currently mix two releases: `core-rust` 1.94.0, `core-libunwind`, `core-libcxx` and `core-libcxxabi` are `sx2026.03.0`; musl, busybox, gcc, llvm, openssl, ca-certificates, socat, eif_build, nit and the Nitro kernel are `sx2025.08.0`. Re-pinning to one release is pending.
+- The StageX pins currently mix two releases: `core-rust` 1.94.0, `core-libunwind`, `core-libcxx` and `core-libcxxabi` are `sx2026.03.0`; musl, busybox, gcc, llvm, openssl, ca-certificates, eif_build, nit and the Nitro kernel are `sx2025.08.0`. Re-pinning to one release is pending.
 
 The reproducibility target is the EIF measurement (PCRs), not the Rust binary hash. See [docs/reproducible-builds.md](docs/reproducible-builds.md).
 
@@ -171,6 +174,7 @@ The reproducibility target is the EIF measurement (PCRs), not the Rust binary ha
 - [docs/contract.md](docs/contract.md): Rust to Move payload types and golden vectors
 - [docs/signing-vectors.md](docs/signing-vectors.md): the shared Kagi vector
 - [docs/reproducible-builds.md](docs/reproducible-builds.md): EIF build and the test-utils guard
+- [docs/host-bridge.md](docs/host-bridge.md): what the parent instance runs, inbound and outbound
 
 ## License
 

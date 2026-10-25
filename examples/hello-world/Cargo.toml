@@ -14,7 +14,7 @@ test-utils = ["nautilus/test-utils"]
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-nautilus = { path = "../../crates/nautilus" }
+nautilus = { path = "../../crates/nautilus", features = ["vsock"] }
 serde.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true

@@ -2,6 +2,7 @@ REGISTRY ?= local
 OUT_DIR ?= out
 ENCLAVE_PACKAGE ?= nautilus-example-hash-attestor
 ENCLAVE_BIN ?= $(ENCLAVE_PACKAGE)
+ENCLAVE_CID ?= 16
 EIF_INPUTS := Cargo.toml Cargo.lock rust-toolchain.toml Containerfile.eif .dockerignore $(shell find crates examples eif scripts -type f)
 
 .DEFAULT_GOAL := eif
@@ -30,6 +31,7 @@ run-eif: $(OUT_DIR)/nitro.eif
 	sudo nitro-cli run-enclave \
 		--cpu-count 2 \
 		--memory 512M \
+		--enclave-cid $(ENCLAVE_CID) \
 		--eif-path $(OUT_DIR)/nitro.eif
 
 .PHONY: run-eif-debug
@@ -38,6 +40,7 @@ run-eif-debug: $(OUT_DIR)/nitro.eif
 	sudo nitro-cli run-enclave \
 		--cpu-count 2 \
 		--memory 512M \
+		--enclave-cid $(ENCLAVE_CID) \
 		--eif-path $(OUT_DIR)/nitro.eif \
 		--debug-mode \
 		--attach-console

@@ -102,6 +102,7 @@ It checks the intent, re-encodes the BCS message and verifies Ed25519. Freshness
 - Both return `Result<Router, ConfigError>` and fail if `config` is invalid.
 - `serve(addr, app, config)` binds TCP and serves until SIGTERM or Ctrl-C, then drains in-flight requests and closes idle connections. `serve_with_shutdown(listener, app, config, signal)` takes any `axum::serve::Listener` (for example a `tokio::net::TcpListener`) and your own shutdown future.
 - Pass the same `ServerConfig` to the router and to `serve`: the router applies the request limits, `serve` the connection limits. Both validate it; `serve` returns `io::ErrorKind::InvalidInput` for an invalid one and logs the effective config at `info` when it starts.
+- `serve_vsock(port, app, config)` (feature `vsock`) binds AF_VSOCK on any local CID and serves the same way; this is what an enclave uses. `VsockListener::bind(port)` gives a listener for `serve_with_shutdown`. Keep TCP for local development and tests. The parent side is described in [host-bridge.md](host-bridge.md).
 - The server speaks HTTP/1.1 with keep-alive; HTTP/2 is not served.
 
 ### ServerConfig

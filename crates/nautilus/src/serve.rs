@@ -40,6 +40,13 @@ pub async fn serve(addr: SocketAddr, app: Router, config: ServerConfig) -> io::R
     .await
 }
 
+/// Binds vsock `port` on any local CID and serves `app` until SIGTERM or Ctrl-C, then drains in-flight requests.
+#[cfg(feature = "vsock")]
+pub async fn serve_vsock(port: u32, app: Router, config: ServerConfig) -> io::Result<()> {
+    config.validate().map_err(invalid_config)?;
+    serve_with_shutdown(VsockListener::bind(port)?, app, config, shutdown_signal()).await
+}
+
 /// Serves `app` on `listener` with `config`'s connection limits until `shutdown` completes, then drains in-flight requests.
 pub async fn serve_with_shutdown<L>(
     mut listener: L,
@@ -112,6 +119,56 @@ where
     drop(listener);
     graceful.shutdown().await;
     Ok(())
+}
+
+/// An AF_VSOCK listener for [`serve_with_shutdown`].
+#[cfg(feature = "vsock")]
+#[derive(Debug)]
+pub struct VsockListener(tokio_vsock::VsockListener);
+
+#[cfg(feature = "vsock")]
+impl VsockListener {
+    /// Binds `port` on any local CID.
+    pub fn bind(port: u32) -> io::Result<Self> {
+        tokio_vsock::VsockListener::bind(tokio_vsock::VsockAddr::new(
+            tokio_vsock::VMADDR_CID_ANY,
+            port,
+        ))
+        .map(Self)
+    }
+}
+
+#[cfg(feature = "vsock")]
+impl Listener for VsockListener {
+    type Io = tokio_vsock::VsockStream;
+    type Addr = tokio_vsock::VsockAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.0.accept().await {
+                Ok(accepted) => return accepted,
+                Err(error) => handle_accept_error(error).await,
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
+}
+
+#[cfg(feature = "vsock")]
+async fn handle_accept_error(error: io::Error) {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+    ) {
+        return;
+    }
+    tracing::error!(%error, "vsock accept failed, retrying in 1 s");
+    sleep(Duration::from_secs(1)).await;
 }
 
 fn invalid_config(error: crate::ConfigError) -> io::Error {
@@ -438,6 +495,72 @@ mod tests {
             .expect("server did not stop")
             .unwrap()
             .unwrap();
+    }
+
+    #[cfg(feature = "vsock")]
+    #[tokio::test]
+    async fn serves_over_vsock_loopback() {
+        use tokio_vsock::{VMADDR_CID_LOCAL, VsockAddr, VsockStream};
+
+        let port = 40_000 + std::process::id() % 20_000;
+        let listener = match VsockListener::bind(port) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("skipping: cannot bind AF_VSOCK ({error}); load vsock_loopback to run");
+                return;
+            }
+        };
+        let ctx = NautilusContext::with_signer(
+            EnclaveIdentity::from_seed([9u8; 32]),
+            FakeAttestor::default(),
+        );
+        let config = ServerConfig {
+            max_connections: 1,
+            ..ServerConfig::default()
+        };
+        let app = router_async(ctx, config.clone(), |bytes, ctx| async move {
+            ctx.sign_intent(Intent(0), &(bytes.len() as u64))
+        })
+        .unwrap();
+        let (shutdown, shutdown_rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(serve_with_shutdown(listener, app, config, async {
+            let _ = shutdown_rx.await;
+        }));
+
+        let addr = VsockAddr::new(VMADDR_CID_LOCAL, port);
+        let mut stream = match VsockStream::connect(addr).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!(
+                    "skipping: cannot connect to VMADDR_CID_LOCAL ({error}); load vsock_loopback to run"
+                );
+                return;
+            }
+        };
+        stream
+            .write_all(b"POST /process_data HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let mut refused = VsockStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 64];
+        let read = timeout(Duration::from_secs(5), refused.read(&mut buf)).await;
+        assert!(matches!(read, Ok(Ok(0) | Err(_))), "{read:?}");
+
+        stream
+            .write_all(b"host: localhost\r\ncontent-length: 3\r\nconnection: close\r\n\r\nabc")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        timeout(Duration::from_secs(5), stream.read_to_string(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+
+        shutdown.send(()).unwrap();
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]
