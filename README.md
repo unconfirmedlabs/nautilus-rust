@@ -57,6 +57,7 @@ examples/
 docs/
   app-development.md
   attestation.md
+  contract.md
   kagi.md
   reproducible-builds.md
   signing-vectors.md

@@ -1,5 +1,7 @@
 use axum::body::Bytes;
-use nautilus::{Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse};
+use nautilus::{
+    Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse, contract::ByteVec,
+};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -7,19 +9,22 @@ const HASH_ATTESTATION_INTENT: Intent = Intent(0);
 
 #[derive(Debug, Clone, Serialize)]
 struct HashAttestation {
-    digest: Vec<u8>,
+    digest: ByteVec,
     length: u64,
+}
+
+fn hash_attestation(bytes: &[u8]) -> HashAttestation {
+    HashAttestation {
+        digest: ByteVec::from(Sha256::digest(bytes).to_vec()),
+        length: bytes.len() as u64,
+    }
 }
 
 fn process_data(
     bytes: Bytes,
     ctx: &NautilusContext,
 ) -> Result<SignedResponse<HashAttestation>, NautilusError> {
-    let attestation = HashAttestation {
-        digest: Sha256::digest(bytes.as_ref()).to_vec(),
-        length: bytes.len() as u64,
-    };
-    ctx.sign_intent(HASH_ATTESTATION_INTENT, &attestation)
+    ctx.sign_intent(HASH_ATTESTATION_INTENT, &hash_attestation(&bytes))
 }
 
 #[tokio::main]
@@ -32,4 +37,17 @@ async fn main() -> anyhow::Result<()> {
     let app = nautilus::router(ctx, ServerConfig::default(), process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    nautilus::golden_vectors! {
+        hash_attestation_abc: (
+            HASH_ATTESTATION_INTENT,
+            1_700_000_000_000,
+            hash_attestation(b"abc"),
+        ) => "000068e5cf8b01000020ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad0300000000000000";
+    }
 }

@@ -4,6 +4,7 @@
 
 mod attestation;
 mod context;
+pub mod contract;
 mod crypto;
 mod error;
 mod intent;
