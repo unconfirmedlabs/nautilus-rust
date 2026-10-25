@@ -59,7 +59,9 @@ impl Default for ServerConfig {
 /// `/health_check` response body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HealthCheckBody {
+    /// Hex-encoded Ed25519 public key.
     pub pk: String,
+    /// Sui address derived from the public key.
     pub address: String,
 }
 
@@ -139,7 +141,9 @@ impl ErrorCode {
 /// JSON error body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorBody {
+    /// Stable error code.
     pub error: ErrorCode,
+    /// Fixed description, or the app's or validation message.
     pub message: String,
 }
 

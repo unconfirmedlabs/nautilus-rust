@@ -1,64 +1,43 @@
 # Reproducible Builds
 
-This repository has deterministic Rust release settings and a generic EIF builder for Nautilus apps.
+The reproducibility target is the EIF measurement (PCR0, PCR1, PCR2), not the Rust binary hash. Anyone rebuilding the same commit should get the same `out/nitro.pcrs`.
 
-## In This Repository
+## Inputs
 
-- `rust-toolchain.toml` pins the Rust compiler.
-- `Cargo.lock` must be committed and used with `--locked`.
-- Release profile uses:
-  - `codegen-units = 1`
-  - `lto = "fat"`
-  - `panic = "abort"`
-  - stripped symbols
-- No crate in this repository uses `build.rs`.
-- `Containerfile.eif` pins StageX build inputs by digest, including `core-rust` 1.94.0 and matching `sx2026.03.0` runtime layers.
-- `eif/run.sh` is the minimal Nitro init target for TCP-on-loopback apps.
-- `Makefile` emits `out/nitro.eif`, `out/nitro.pcrs`, and `out/rootfs.cpio`.
+- `rust-toolchain.toml` pins Rust 1.94.1 for local and CI builds; `Cargo.lock` is committed and every build uses `--locked`.
+- Release profile: `codegen-units = 1`, `lto = "fat"`, `panic = "abort"`, stripped symbols. No crate has a `build.rs`.
+- `Containerfile.eif` pins every StageX image by digest. The pins currently mix two StageX releases:
+  - `sx2026.03.0`: `core-rust` (Rust 1.94.0), `core-libunwind`, `core-libcxx`, `core-libcxxabi`;
+  - `sx2025.08.0`: musl, busybox, gcc, llvm, openssl, ca-certificates, socat, eif_build, nit and the Nitro kernel.
+  The `libunwind` symlinks in the build stage bridge the two. Re-pinning to one release is pending. Keep `workspace.package.rust-version` compatible with the image's Rust before publishing PCRs.
+- Crates are fetched from the network during the image build; they are not vendored.
 
-## Rust Release Build Checklist
+## Test-Utils Guard
 
-Use a fixed checkout path or remap paths:
-
-```shell
-export SOURCE_DATE_EPOCH=0
-export RUSTFLAGS="--remap-path-prefix=$(pwd)=/workspace"
-cargo build --workspace --release --locked
-```
+`scripts/assert-no-test-utils.sh <package> [target]` fails if the package's dependency graph enables `nautilus/test-utils`, which would put the public development identity and fake attestation into the enclave. `Containerfile.eif` runs it before `cargo build`, so `make eif` refuses such a package. CI runs it for both examples on `x86_64-unknown-linux-musl`, and checks that it fails with `--features test-utils`.
 
 ## EIF Build
-
-Build the default hash example:
 
 ```shell
 make eif
 cat out/nitro.pcrs
 ```
 
-Build a different workspace package:
-
 ```shell
 make eif ENCLAVE_PACKAGE=my-enclave-app ENCLAVE_BIN=my-enclave-app
 ```
 
-The build scaffold:
+The default package is `nautilus-example-hash-attestor`, built without `test-utils`, so it is NSM-backed. The builder:
 
-- builds the selected package for `x86_64-unknown-linux-musl`
-- copies the binary to `/nautilus-app`
-- exposes enclave vsock port 3000 to `127.0.0.1:3000`
-- normalizes initramfs file timestamps to Unix epoch 0
-- sorts cpio entries
-- writes gzip output without name/timestamp metadata
-- writes PCRs to `out/nitro.pcrs`
+- builds the package for `x86_64-unknown-linux-musl` with a static, relocation-free binary;
+- copies it to `/nautilus-app` with `eif/run.sh` as the init target, which bridges vsock port 3000 to `127.0.0.1:3000`;
+- sets initramfs timestamps to epoch 0, sorts entries, and writes `cpio --reproducible` through `gzip --best --no-name`;
+- runs `eif_build` with a fixed kernel and command line and writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
 
-The expected verification target is a reproducible EIF measurement, not just a reproducible Rust binary.
+CI builds the workspace for `x86_64-unknown-linux-musl` but does not build the EIF.
 
-## Production Notes
+## Before Publishing PCRs
 
-The included builder is intentionally minimal. A production app should review:
-
-- whether the app needs CA certificates or outbound host-mediated networking
-- whether the app should bind only `127.0.0.1:3000`
-- the exact StageX image digests and Nitro kernel version
-- `ENCLAVE_PACKAGE` and `ENCLAVE_BIN` values in release automation
-- PCR publication and Kagi policy updates
+- Build from a clean checkout of a tagged commit; rebuild on a second machine and compare `out/nitro.pcrs`.
+- Review `ENCLAVE_PACKAGE`, `ENCLAVE_BIN`, the StageX digests and the kernel.
+- Do not register PCRs from a debug-mode run; see [attestation.md](attestation.md#debug-mode).

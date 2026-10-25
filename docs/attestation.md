@@ -1,40 +1,65 @@
 # Attestation
 
-Nautilus binds a per-boot Ed25519 public key to an AWS Nitro Enclave attestation document.
+The enclave generates an Ed25519 key at boot and asks the Nitro Secure Module (NSM) for an attestation document that carries that public key. A verifier that checks the document and its PCRs can then trust signatures from the key.
 
-The intended verifier flow is:
+## Flow
 
-1. Request `POST /attestation` with a nonce.
-2. Verify the returned Nitro attestation document and PCRs.
-3. Confirm the attestation document contains the app public key.
-4. Accept `/process_data` signatures from that public key.
+1. `NautilusContext::from_runtime()` opens `/dev/nsm` through `NsmAttestor` and generates the key from OS randomness mixed with 32 bytes of NSM entropy. It errors if the device is missing and never falls back to a development identity.
+2. The verifier sends `POST /attestation` with a fresh random nonce.
+3. `NautilusContext::attestation(nonce, user_data)` validates the request and calls the NSM. The document is returned as hex: `{"attestation": "<hex>"}`.
+4. The verifier checks the COSE signature, the certificate chain to the AWS root, the PCRs, the nonce, and that `public_key` equals `GET /health_check`'s `pk`.
+5. The verifier accepts `/process_data` signatures from that key. On Sui, Kagi does steps 4 and 5; see [kagi.md](kagi.md).
 
-The `nautilus` crate exposes the `Attestor` trait and implements it for `/dev/nsm` as `NsmAttestor`, on top of the standalone `nautilus-nsm` driver.
+Attestation calls block on the device, so the server runs them on the blocking thread pool. They share the `max_concurrent` limit with `/process_data`.
 
-Tests and local examples use `FakeAttestor` behind the `test-utils` feature, which makes route behavior testable without Nitro hardware.
+## What Attestation Proves
 
-## Kagi
+It proves that the public key in the document was generated inside a Nitro Enclave whose image measured to the document's PCRs, at the time the document was produced.
 
-For Sui Move verification, use Kagi:
+It does not prove:
 
-https://github.com/unconfirmedlabs/kagi
+- freshness of later signatures: a signature is valid for as long as the key is trusted;
+- that the host is honest about time: `timestamp_ms` in signed messages is the enclave's clock, which the parent instance can influence;
+- anything about inputs from the host: request bodies, files and secrets delivered over vsock are unmeasured, untrusted input. Validate them inside the enclave as you would any network input.
 
-Kagi owns PCR policy, Nitro attestation document validation, public-key registration, and Ed25519 verification on-chain. Nautilus Rust owns producing the attestation document and signing responses with the attested key.
+## PCRs
 
-See [kagi.md](kagi.md).
+AWS defines the measurements as follows. All are SHA-384, 48 bytes.
 
-## Nitro Runtime
+| PCR | Hash of |
+| --- | --- |
+| PCR0 | Enclave image file |
+| PCR1 | Linux kernel and bootstrap |
+| PCR2 | Application |
+| PCR3 | IAM role of the parent instance |
+| PCR4 | Instance ID of the parent instance |
+| PCR8 | EIF signing certificate, only for signed EIFs |
 
-Create the context inside the enclave with:
+`eif_build` writes PCR0, PCR1 and PCR2 to `out/nitro.pcrs`. Kagi pins all three. docs.sui.io describes PCR0..2 differently; the AWS definitions above are authoritative.
 
-```rust
-let ctx = nautilus::NautilusContext::from_runtime()?;
-```
+## Debug Mode
 
-`from_runtime` fails if `/dev/nsm` cannot be opened and never falls back to a development identity. It generates the enclave signing identity from OS randomness mixed with NSM entropy. The resulting Ed25519 public key is included in NSM attestation requests so verifiers can bind signed application responses to the attested enclave.
+Enclaves started with `--debug-mode` or `--attach-console` report PCRs made entirely of zeros and cannot be used for attestation. Their memory is also readable from the host.
 
-## Freshness
+- Kagi's `set_pcrs` rejects all-zero PCRs (`EDebugPcrs`). Never register zeros "for development": that policy would admit every debug enclave.
+- `make run-eif-debug` starts the enclave in debug mode, so that enclave cannot register. Use it to read the console only.
 
-`POST /attestation` requires a random nonce supplied by the verifier; requests without one (or with an empty one) are rejected with `400 invalid_request`. `nonce` and `user_data` are limited to 512 bytes each (`MAX_ATTESTATION_DATA_BYTES`, Sui's `MAX_USER_DATA_LENGTH`), and the public key is always the 32-byte enclave key, so every returned document can be registered on Sui.
+## Certificate Window
 
-Setting `ServerConfig::allow_unnonced_attestation` registers `GET /attestation` and accepts nonce-less `POST /attestation` for diagnostics. Those documents carry no verifier freshness and do not provide replay protection.
+The document is signed by a leaf certificate that lives about three hours. Sui's `load_nitro_attestation` checks the whole chain against the on-chain `Clock`; it does not compare the document's own timestamp. Call `load_nitro_attestation` and `kagi::enclave::new` within about three hours of fetching the document, or registration aborts. Fetch a new document if the window has passed.
+
+## Sui Limits
+
+- `nonce` and `user_data`: at most 512 bytes each (Sui `MAX_USER_DATA_LENGTH`). Nautilus enforces this as `MAX_ATTESTATION_DATA_BYTES` before calling the NSM, returning `invalid_request`, so every document it returns can be loaded on Sui.
+- `public_key`: always the 32-byte Ed25519 key of the context.
+- Nitro attestation verification is enabled on Sui mainnet since protocol version 84.
+
+## Nonces
+
+`POST /attestation` requires a non-empty nonce. `ServerConfig::allow_unnonced_attestation` registers `GET /attestation` and accepts nonce-less `POST` requests for diagnostics. Those documents carry no verifier freshness.
+
+On-chain registration does not check the nonce; its only freshness bound is the certificate window. Off-chain verifiers should check that the nonce is the one they sent.
+
+## Local Development
+
+With the `test-utils` feature, `NautilusContext::development()` uses `testing::FakeAttestor`, which returns a JSON stand-in, not a COSE document. It exercises routes and request validation only; it cannot be loaded on Sui.

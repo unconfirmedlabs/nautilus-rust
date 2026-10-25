@@ -33,10 +33,10 @@ Notes:
 Every signed message is the BCS encoding of Kagi's Move struct:
 
 ```move
-public struct IntentMessage<T: drop> has copy, drop {
+public struct IntentMessage<Payload: drop> has copy, drop {
     intent: u8,
     timestamp_ms: u64,
-    payload: T,
+    payload: Payload,
 }
 ```
 

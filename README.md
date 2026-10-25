@@ -1,107 +1,41 @@
 # Nautilus Rust
 
-Nautilus Rust is a small framework for building application-specific AWS Nitro Enclave binaries in Rust.
+A small Rust framework for AWS Nitro Enclave applications whose output is verified on Sui. An app crate imports `nautilus`, writes one handler, and gets a per-boot Ed25519 identity, Nitro attestation bound to that key, domain-separated signing of typed payloads, and a bounded HTTP server.
 
-It provides the reusable enclave pieces that should be common across Nautilus projects:
-
-- an app-facing `nautilus` crate
-- a standalone `/dev/nsm` driver in `nautilus-nsm`
-- per-boot Ed25519 enclave identity
-- Sui address derivation from the enclave public key
-- signed application responses
-- Kagi-compatible BCS intent signing
-- attestation request plumbing
-- local deterministic test fakes
-- Axum route helpers for simple enclave services
-- deterministic EIF build scaffolding
-
-Application developers should import `nautilus` into their own enclave app crate. They should not edit the framework crate for app-specific business logic.
-
-## Project Scope
-
-This repository is intentionally generic. It does not include proprietary Nautilus application logic, including the audio ingester.
-
-Nautilus Rust owns in-enclave application primitives:
-
-- identity generation
-- signing
-- attestation interfaces
-- NSM integration
-- process-data route scaffolding
-- test support
-- release-build conventions
-
-Nautilus Rust does not own parent-instance orchestration, host-side services, S3 access, outbound networking, or general host-to-enclave transport.
-
-Nautilus Rust also does not own on-chain verification. Use Kagi for the Sui Move side:
-
-https://github.com/unconfirmedlabs/kagi
-
-Kagi is the companion Move package for registering Nitro enclave public keys against PCR policy and verifying enclave-signed messages on-chain. Nautilus Rust produces the in-enclave artifacts Kagi expects: a Nitro attestation document bound to an Ed25519 public key, plus signatures over Kagi-compatible BCS intent messages.
-
-For parent host to enclave communication over vsock, and for host-mediated outbound networking, use Argonaut:
-
-https://github.com/unconfirmedlabs/argonaut
-
-The split is deliberate. Nautilus Rust should own code that must be measured inside the enclave. Kagi should own on-chain verification. Argonaut should own parent-host transport, proxying, lifecycle, and outbound integration.
-
-## Repository Layout
-
-```text
-crates/
-  nautilus/      # app-facing framework crate
-  nautilus-nsm/  # standalone AWS Nitro Secure Module driver
-examples/
-  hello-world/   # minimal signed response service
-  hash-attestor/ # hashes uploaded bytes and signs the digest
-docs/
-  app-development.md
-  attestation.md
-  contract.md
-  kagi.md
-  reproducible-builds.md
-  signing-vectors.md
-Containerfile.eif # generic reproducible EIF builder
-Makefile          # EIF build targets
-```
+On-chain verification lives in [Kagi](https://github.com/unconfirmedlabs/kagi), the companion Move package. Nautilus Rust produces what Kagi checks: an attestation document carrying the enclave public key, and Ed25519 signatures over BCS intent messages.
 
 ## Crates
 
-### `nautilus`
+- `nautilus`: the app-facing crate, `#![forbid(unsafe_code)]`. `NautilusContext` (identity, signing, attestation), `NsmAttestor` and `NautilusContext::from_runtime()` for `/dev/nsm`, the `Signer` and `Attestor` traits, `router` / `router_async` / `serve`, and `contract` (Move-compatible BCS types and golden vectors). Test fakes are behind the `test-utils` feature.
+- `nautilus-nsm`: the standalone `/dev/nsm` driver (CBOR requests, ioctl). It does not depend on `nautilus` and holds the only `unsafe` code. Apps do not need it directly; `nautilus` depends on it.
 
-The framework crate imported by app developers.
-
-It includes:
-
-- `NautilusContext`: shared enclave context passed to business logic
-- `EnclaveIdentity`: Ed25519 identity and Sui address helper
-- `Attestor`: trait for attestation providers
-- `router` / `router_async`: standard HTTP routes with body, concurrency and timeout limits (`ServerConfig`)
-- `serve`: HTTP server with graceful shutdown on SIGTERM and Ctrl-C
-- `Intent`, `IntentMessage`, `SignedResponse`: domain-separated signing of typed payloads
-- `verify_signed_response`: off-chain verification of signed responses
-- `NsmAttestor`: the `/dev/nsm` attestation provider
-- `NautilusContext::from_runtime()`: production context that requires `/dev/nsm`
-- `testing::FakeAttestor` and `NautilusContext::development()`: local fakes behind the `test-utils` feature
-
-The core crate uses `#![forbid(unsafe_code)]`.
-
-### `nautilus-nsm`
-
-The standalone Nitro Secure Module driver. It does not depend on `nautilus`.
-
-It includes:
-
-- `Nsm`, which opens `/dev/nsm` once
-- CBOR request and response encoding for NSM requests
-- `/dev/nsm` ioctl integration
-- NSM-backed random bytes
-
-This crate contains the hardware-specific unsafe boundary. Keeping it separate makes the reusable app framework easier to test and audit.
+```text
+crates/nautilus       app-facing crate
+crates/nautilus-nsm   /dev/nsm driver
+examples/hello-world  signs a typed greeting
+examples/hash-attestor signs the SHA-256 and length of the request body
+docs/                 guides, see below
+Containerfile.eif     reproducible EIF builder
+Makefile              EIF build and run targets
+```
 
 ## Quick Start
 
-Run the full local check suite:
+Run an example locally with the development identity (public key, fake attestation, no Nitro hardware):
+
+```shell
+cargo run -p nautilus-example-hash-attestor --features test-utils
+```
+
+```shell
+curl -s http://127.0.0.1:3000/health_check
+curl -s -X POST --data-binary "hello" http://127.0.0.1:3000/process_data
+curl -s -X POST -d '{"nonce":"0x010203"}' http://127.0.0.1:3000/attestation
+```
+
+Without `--features test-utils` the examples call `NautilusContext::from_runtime()`, which fails unless `/dev/nsm` exists.
+
+Check suite:
 
 ```shell
 cargo fmt --all -- --check
@@ -110,56 +44,41 @@ cargo test --workspace --all-targets --locked
 cargo test --workspace --all-targets --locked --features test-utils
 ```
 
-Run the hash example locally:
+## Writing an App
 
-```shell
-cargo run -p nautilus-example-hash-attestor --features test-utils
-```
-
-Then call it:
-
-```shell
-curl -s http://127.0.0.1:3000/health_check
-curl -s -X POST --data-binary "hello" http://127.0.0.1:3000/process_data
-```
-
-With `test-utils` the examples use `NautilusContext::development()`, whose key is public and which does not require Nitro hardware. Without it they call `NautilusContext::from_runtime()`, which fails unless `/dev/nsm` exists. `Containerfile.eif` refuses to build an enclave package that enables `nautilus/test-utils`.
-
-## App Development Pattern
-
-A Nautilus application should be its own Rust crate:
-
-```text
-my-enclave-app/
-  Cargo.toml
-  src/main.rs
-```
-
-Depend on the framework:
+`Cargo.toml`:
 
 ```toml
+[features]
+test-utils = ["nautilus/test-utils"]
+
 [dependencies]
 anyhow = "1"
 axum = "0.8"
-nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust" }
+nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust", tag = "v0.2.0" }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = "0.3"
 ```
 
-Write application logic as a handler:
+Always pin the git dependency; `rev = "<commit>"` works in place of `tag`.
+
+`src/main.rs`:
 
 ```rust
 use axum::body::Bytes;
-use nautilus::{Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse, router};
+use nautilus::{
+    Intent, NautilusContext, NautilusError, ServerConfig, SignedResponse, contract::ByteVec,
+};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 const HASH_ATTESTATION_INTENT: Intent = Intent(0);
 
-#[derive(Clone, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct HashAttestation {
-    digest: Vec<u8>,
+    digest: ByteVec,
     length: u64,
 }
 
@@ -167,71 +86,44 @@ fn process_data(
     bytes: Bytes,
     ctx: &NautilusContext,
 ) -> Result<SignedResponse<HashAttestation>, NautilusError> {
-    let attestation = HashAttestation {
-        digest: Sha256::digest(bytes.as_ref()).to_vec(),
+    let payload = HashAttestation {
+        digest: ByteVec::from(Sha256::digest(&bytes).to_vec()),
         length: bytes.len() as u64,
     };
-    ctx.sign_intent(HASH_ATTESTATION_INTENT, &attestation)
+    ctx.sign_intent(HASH_ATTESTATION_INTENT, &payload)
 }
-```
 
-Pick the context at compile time. Expose a `test-utils = ["nautilus/test-utils"]` feature in your app crate for local runs; the default build is NSM-backed and fails closed without `/dev/nsm`:
-
-```rust
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().init();
     #[cfg(feature = "test-utils")]
     let ctx = NautilusContext::development();
     #[cfg(not(feature = "test-utils"))]
     let ctx = NautilusContext::from_runtime()?;
-    let app = router(ctx, ServerConfig::default(), process_data);
+    let app = nautilus::router(ctx, ServerConfig::default(), process_data);
     nautilus::serve("127.0.0.1:3000".parse()?, app).await?;
     Ok(())
 }
 ```
 
-## Kagi Integration
+The handler runs on the blocking thread pool. The matching Move struct is `HashAttestation { digest: vector<u8>, length: u64 }`; see [docs/contract.md](docs/contract.md) for the type mapping. `Containerfile.eif` builds a package of this workspace, so add the app as a workspace member and run `make eif ENCLAVE_PACKAGE=my-enclave-app ENCLAVE_BIN=my-enclave-app`.
 
-Use Kagi when a Sui Move contract needs to verify Nautilus Rust output.
+## Routes
 
-The intended split is:
+| Route | Body | Response |
+| --- | --- | --- |
+| `GET /health_check` | none | `{"pk": "<hex>", "address": "0x<hex>"}` |
+| `POST /attestation` | `{"nonce": "<hex>", "user_data": "<hex>"}`, nonce required | `{"attestation": "<hex>"}` |
+| `POST /process_data` | raw bytes | the handler's JSON |
+| `GET /attestation` | none | only when `ServerConfig::allow_unnonced_attestation` is set |
 
-- `nautilus-rust`: enclave identity, attestation request, and signed response generation
-- `kagi`: PCR policy, attestation-document validation, enclave registration, and Ed25519 verification on-chain
+`nonce` and `user_data` are at most 512 bytes each (`MAX_ATTESTATION_DATA_BYTES`, Sui's limit). `/attestation` and `/process_data` share the `max_concurrent` limit; `/health_check` does not.
 
-The signing contract is a BCS intent message containing `intent: u8`, `timestamp_ms: u64`, and the app payload. `NautilusContext::sign_intent` stamps the enclave time and signs the same layout Kagi verifies in Move. There is no API for signing raw bytes.
-
-See [docs/kagi.md](docs/kagi.md) and [docs/signing-vectors.md](docs/signing-vectors.md).
-
-## Standard Routes
-
-`nautilus::router` creates these routes:
-
-- `GET /health_check`
-- `POST /attestation`
-- `POST /process_data`
-- `GET /attestation`, only when `ServerConfig::allow_unnonced_attestation` is set
-
-`GET /health_check` returns the enclave public key and derived Sui address.
-
-`POST /attestation` takes a hex-encoded `nonce` (required unless `allow_unnonced_attestation` is set) and optional hex-encoded `user_data`, each at most 512 bytes (`MAX_ATTESTATION_DATA_BYTES`, the Sui limit):
-
-```json
-{
-  "nonce": "0x010203",
-  "user_data": "0xfeed"
-}
-```
-
-`POST /process_data` receives raw bytes and passes them to the application handler. `router` runs the handler on the blocking thread pool; `router_async` takes an async handler instead.
-
-`ServerConfig` bounds the server: `max_body_bytes` (default 8 MiB), `max_concurrent` in-flight `/attestation` and `/process_data` requests (default: available parallelism), and `request_timeout` (default 30 s). Peak buffered request memory is about `max_concurrent * max_body_bytes`; size it to the enclave. `/health_check` is not limited.
-
-Errors are JSON `{"error": "<code>", "message": "..."}` with stable codes:
+Errors are JSON `{"error": "<code>", "message": "..."}`:
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| `invalid_request` | 400 | framework validation failed (hex, JSON, missing nonce, attestation bounds) |
+| `invalid_request` | 400 | framework validation failed: hex, JSON, missing nonce, attestation bounds |
 | `body_read_failed` | 400 | the request body could not be read |
 | `request_timeout` | 408 | `request_timeout` elapsed |
 | `body_too_large` | 413 | body exceeds `max_body_bytes` |
@@ -242,123 +134,39 @@ Errors are JSON `{"error": "<code>", "message": "..."}` with stable codes:
 
 Internal and attestation error details are logged, never returned.
 
-## Attestation Model
+## Security
 
-Nautilus binds application signatures to Nitro attestation:
+- Fail-closed identity. `from_runtime()` opens `/dev/nsm`, mixes 32 bytes of NSM entropy into the per-boot key, and errors if the device is missing. It never falls back to a development identity.
+- `test-utils` is off by default. It gates `development()` (seed `[42; 32]`, public), `FakeAttestor`, `EnclaveIdentity::from_seed` and `sign_intent_at`. `Containerfile.eif` runs `scripts/assert-no-test-utils.sh` and refuses to build an enclave package that enables it.
+- Intent domain separation. Every signature covers BCS `(intent: u8, timestamp_ms: u64, payload)`. There is no API that signs raw bytes, so a client cannot get an arbitrary message signed. Give each message kind its own intent value.
+- Timestamps are enclave-claimed. `sign_intent` stamps `now_ms()`, the enclave's system clock, which the host controls. It is not attested time.
+- Replay protection is the consumer's job. Neither Nautilus Rust nor Kagi checks freshness or uniqueness; the consuming Move module must enforce a window against `Clock` and/or a uniqueness key.
 
-1. The enclave creates a per-boot Ed25519 identity.
-2. The public key is exposed by `/health_check`.
-3. The public key is included in NSM attestation requests.
-4. A verifier requests `POST /attestation` with a fresh nonce.
-5. The verifier validates the Nitro attestation document, PCRs, nonce, and public key.
-6. The verifier accepts `/process_data` signatures only from the attested public key.
+What an attestation does and does not prove: [docs/attestation.md](docs/attestation.md#what-attestation-proves).
 
-The current framework returns raw Nitro attestation document bytes as lowercase hex. Verifier-side COSE and certificate-chain validation belongs in the client, host system, or Kagi/Sui Move code that consumes the document.
+## Host Side
 
-## Argonaut Integration
+Enclaves have no network; the only I/O is vsock to the parent instance. `eif/run.sh` bridges enclave vsock port 3000 to the app on `127.0.0.1:3000` with `socat`. Parent-side orchestration, proxying and outbound networking are out of scope here.
 
-Nitro enclaves do not have normal external networking. The practical boundary is vsock between the parent instance and the enclave.
+[Argonaut](https://github.com/miraicloud/argonaut) is a separate Go companion binary for Nitro vsock bridging, config delivery and NSM proxying, maintained under the miraicloud organization. It is not part of this repository.
 
-Use Argonaut for host-side integration:
+## Deterministic Builds
 
-- parent host to enclave communication
-- vsock transport
-- host-mediated outbound networking
-- proxying data from services such as S3 into the enclave
-- keeping networking policy outside the app EIF when the app does not need direct outbound behavior
+- `rust-toolchain.toml` pins Rust 1.94.1; `Cargo.lock` is committed and CI uses `--locked`.
+- Release builds use one codegen unit, fat LTO, stripped symbols and `panic = "abort"`. No crate has a `build.rs`.
+- `Containerfile.eif` pins StageX images by digest, builds for `x86_64-unknown-linux-musl`, normalizes initramfs timestamps and runs `eif_build`. `make eif` writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
+- The StageX pins currently mix two releases: `core-rust` 1.94.0, `core-libunwind`, `core-libcxx` and `core-libcxxabi` are `sx2026.03.0`; musl, busybox, gcc, llvm, openssl, ca-certificates, socat, eif_build, nit and the Nitro kernel are `sx2025.08.0`. Re-pinning to one release is pending.
 
-Nautilus Rust should remain focused on code that must be measured inside the enclave. Argonaut should own code that runs on the parent host.
+The reproducibility target is the EIF measurement (PCRs), not the Rust binary hash. See [docs/reproducible-builds.md](docs/reproducible-builds.md).
 
-## Deterministic Build Groundwork
+## Docs
 
-This repository includes deterministic release-build settings and a generic EIF build scaffold:
-
-- `rust-toolchain.toml` pins the local development compiler version.
-- `Cargo.lock` is committed and CI uses `--locked`.
-- The workspace uses resolver v2.
-- Release builds use one codegen unit, full LTO, stripped symbols, and `panic = "abort"`.
-- The core framework crate forbids unsafe code.
-- The NSM unsafe boundary is isolated to `nautilus-nsm`.
-- `scripts/assert-no-test-utils.sh` fails the EIF build if the enclave package enables `nautilus/test-utils`.
-- There are no `build.rs` scripts.
-- CI enforces formatting, clippy, and locked tests.
-- `Containerfile.eif` uses pinned StageX inputs, normalized initramfs timestamps, and `eif_build`.
-- `make eif` emits `out/nitro.eif`, `out/nitro.pcrs`, and `out/rootfs.cpio`.
-
-For Rust-only release builds, use a fixed build environment and path remapping:
-
-```shell
-export SOURCE_DATE_EPOCH=0
-export RUSTFLAGS="--remap-path-prefix=$(pwd)=/workspace"
-cargo build --workspace --release --locked
-```
-
-The EIF builder pins StageX `core-rust` to Rust 1.94.0 and includes the matching `sx2026.03.0` runtime layers needed by that toolchain. Keep `workspace.package.rust-version` compatible with the pinned Rust toolchain before publishing PCRs.
-
-Build the default example EIF:
-
-```shell
-make eif
-cat out/nitro.pcrs
-```
-
-Build a different workspace package:
-
-```shell
-make eif ENCLAVE_PACKAGE=my-enclave-app ENCLAVE_BIN=my-enclave-app
-```
-
-For enclave release artifacts, the reproducibility target is the EIF measurement, not just the Rust binary hash. Keep the container base image, kernel, initramfs contents, file ordering, timestamps, compression settings, and EIF build tool version pinned.
-
-See [docs/reproducible-builds.md](docs/reproducible-builds.md).
-
-## Testing
-
-The test suite covers:
-
-- deterministic identity creation
-- Ed25519 signing and verification
-- Sui address formatting
-- intent message layout
-- Kagi-compatible signing vector
-- BCS payload signing
-- fake attestation request recording
-- attestation public-key binding
-- HTTP route behavior
-- body-size enforcement
-- bad hex rejection
-- NSM CBOR request encoding
-- NSM response decoding
-- NSM error mapping
-- public-key length validation
-
-Run:
-
-```shell
-cargo test --workspace --all-targets --locked
-```
-
-## Security Boundaries
-
-Keep application-specific business logic in a consuming app crate. Keep reusable enclave primitives in this repository.
-
-Recommended boundaries:
-
-- inside EIF: Nautilus app binary, app business logic, signing, attestation
-- outside EIF: Argonaut, S3 clients, outbound networking, host orchestration, durable storage
-- verifier/client side: Nitro attestation document validation, PCR allowlists, nonce freshness checks
-
-This keeps the measured enclave surface smaller and makes it easier to reason about what exactly is being attested.
-
-## Current Status
-
-This is an initial framework repository. It is ready for local app prototyping and crate-level testing. Before using it for production enclaves, add project-specific:
-
-- Kagi PCR policy and on-chain registration
-- project-specific EIF build review
-- release signing
-- deployment automation
-- parent-host Argonaut configuration
+- [docs/app-development.md](docs/app-development.md): API walkthrough, server limits, memory sizing, logging
+- [docs/attestation.md](docs/attestation.md): PCRs, debug mode, certificate window, Sui limits, what attestation proves
+- [docs/kagi.md](docs/kagi.md): on-chain registration and verification with Kagi
+- [docs/contract.md](docs/contract.md): Rust to Move payload types and golden vectors
+- [docs/signing-vectors.md](docs/signing-vectors.md): the shared Kagi vector
+- [docs/reproducible-builds.md](docs/reproducible-builds.md): EIF build and the test-utils guard
 
 ## License
 
