@@ -162,7 +162,7 @@ Enclaves have no network; the only I/O is vsock to the parent instance. With the
 - `rust-toolchain.toml` pins Rust 1.94.1; `Cargo.lock` is committed and CI uses `--locked`.
 - Release builds use one codegen unit, fat LTO and stripped symbols, and unwind on panic so a panicking handler returns 500 instead of ending the enclave. No workspace crate has a `build.rs`; some dependencies do (for example `serde`, `libc`, `proc-macro2`, `curve25519-dalek`), and they run inside the pinned build image.
 - `Containerfile.eif` pins StageX images by digest, builds for `x86_64-unknown-linux-musl`, normalizes initramfs timestamps and runs `eif_build`. `make eif` writes `out/nitro.eif`, `out/nitro.pcrs` and `out/rootfs.cpio`.
-- Every StageX image is pinned to its `linux/amd64` manifest from release `sx2026.03.0` (`core-rust` is Rust 1.94.0, `core-gcc` is GCC 15.2.0).
+- StageX images are pinned to their `linux/amd64` manifests. The toolchain is from release `sx2026.03.0` (`core-rust` is Rust 1.94.0, `core-gcc` is GCC 15.2.0). The kernel (`user-linux-nitro`), `user-eif_build`, `user-gen_initramfs` and `user-nit` stay on the `sx2025.08.0` pins Mysten's template uses, because enclaves built with their `sx2026.03.0` versions never boot on Nitro.
 
 The reproducibility target is the EIF measurement (PCRs), not the Rust binary hash. See [docs/reproducible-builds.md](docs/reproducible-builds.md).
 

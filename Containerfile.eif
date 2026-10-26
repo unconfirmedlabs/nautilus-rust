@@ -2,6 +2,10 @@
 # It follows the StageX pattern used by the upstream Nautilus template: pinned
 # source-bootstrapped build inputs, normalized initramfs timestamps, and explicit
 # PCR output.
+#
+# user-eif_build, user-gen_initramfs, user-linux-nitro and user-nit stay on the
+# sx2025.08.0 pins that Mysten's template uses: with the sx2026.03.0 builds of
+# those four, the enclave never boots on Nitro (no console, no heartbeat).
 
 FROM stagex/core-binutils@sha256:9fedf2687ad85efab8da71417bfbe78659db5295ee4e288df3a04315e3b687ac AS core-binutils
 FROM stagex/core-ca-certificates@sha256:4d901fb99baee5f461ede66e37edf2505d9d367222feded99e80892b1940f710 AS core-ca-certificates
@@ -19,11 +23,11 @@ FROM stagex/core-libunwind@sha256:c76fcc66148b19230247b7cdba06040dbe2f47aa19d7a4
 FROM stagex/core-pkgconf@sha256:437751215006901bd9a31720de95fa10e294b585abbfe78436310cec481884e4 AS core-pkgconf
 FROM stagex/core-busybox@sha256:d608daa946e4799cf28b105aba461db00187657bd55ea7c2935ff11dac237e27 AS core-busybox
 FROM stagex/core-libzstd@sha256:dd234de20cd651715ffc67ced1bb06cc3ac3011d881055beda335869d7d4210f AS core-libzstd
-FROM stagex/user-eif_build@sha256:907c8940cabb05462952b8b65ce64d4a6e346da302b3086fa1716f470dbdb0f1 AS user-eif_build
-FROM stagex/user-gen_initramfs@sha256:a83e25487056fef6c20c1861a744340780f4c0ba95a572b5158094fc2637de7a AS user-gen_initramfs
-FROM stagex/user-linux-nitro@sha256:9a5c6d0832ba0bc8c5ed29d5a064d69b2837eee4bf689a7df60947a181aeb6ff AS user-linux-nitro
+FROM stagex/user-eif_build@sha256:935032172a23772ea1a35c6334aa98aa7b0c46f9e34a040347c7b2a73496ef8a AS user-eif_build
+FROM stagex/user-gen_initramfs@sha256:a87e9a3fa8468d2e08b5abb0a6da4c7a11df22273e2c526cb22e6b131151def8 AS user-gen_initramfs
+FROM stagex/user-linux-nitro@sha256:aa1006d91a7265b33b86160031daad2fdf54ec2663ed5ccbd312567cc9beff2c AS user-linux-nitro
 FROM stagex/user-cpio@sha256:d0c7abf1f7e8e157c1d86d7c02b5095a65aeb71abf1e4e8886dc57b4e70a71a7 AS user-cpio
-FROM stagex/user-nit@sha256:3d1d534143a4f5612c565c733f2f43985438f5f980f8be98767ba955eae19033 AS user-nit
+FROM stagex/user-nit@sha256:60b6eef4534ea6ea78d9f29e4c7feb27407b615424f20ad8943d807191688be7 AS user-nit
 
 FROM scratch AS base
 COPY --from=core-busybox . /
