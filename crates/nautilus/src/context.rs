@@ -5,8 +5,8 @@ use zeroize::Zeroizing;
 
 use crate::{
     AttestationRequest, Attestor, EnclaveIdentity, Intent, IntentMessage, NautilusError,
-    NsmAttestor, PublicKeyBytes, SignedResponse, Signer, crypto::sui_address, encode_hex,
-    intent_message, now_ms,
+    NsmAttestor, PublicKeyBytes, SignedResponse, Signer, Timestamp, crypto::sui_address,
+    encode_hex, intent_message, now_ms,
 };
 
 /// App-facing context passed to business logic.
@@ -84,6 +84,23 @@ impl NautilusContext {
         payload: T,
     ) -> Result<SignedResponse<T>, NautilusError> {
         self.sign_message(intent.into(), now_ms()?, payload)
+    }
+
+    /// Reads the clock once, for [`Self::sign_intent_stamped`]: several intents signed with the
+    /// same [`Timestamp`] carry the same `timestamp_ms`.
+    pub fn now(&self) -> Result<Timestamp, NautilusError> {
+        Timestamp::now()
+    }
+
+    /// Signs `payload` as an intent message stamped with `timestamp`, a reading of the clock
+    /// ([`Self::now`]) shared with the other intents of the same answer.
+    pub fn sign_intent_stamped<T: Serialize>(
+        &self,
+        intent: impl Into<Intent>,
+        timestamp: Timestamp,
+        payload: T,
+    ) -> Result<SignedResponse<T>, NautilusError> {
+        self.sign_message(intent.into(), timestamp.as_ms(), payload)
     }
 
     /// Signs `payload` as an intent message with a fixed timestamp.

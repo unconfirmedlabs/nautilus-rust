@@ -77,6 +77,7 @@ fn sign_price(ctx: &NautilusContext) -> Result<SignedResponse<Price>, NautilusEr
 - `sign_intent(intent, payload)` signs BCS `(intent, now_ms(), payload)` and returns `SignedResponse { response: IntentMessage { intent, timestamp_ms, data }, signature }` with a hex signature. It takes the payload by value and moves it into `data`, so the payload needs only `Serialize`.
 - `now_ms()` is Unix milliseconds from the system clock, never lower than a previous call in the process. It is the enclave's claim, not attested time.
 - `intent_message(intent, timestamp_ms, &payload)` returns the exact signed bytes.
+- `now()` reads the clock once and returns a `Timestamp`; `sign_intent_stamped(intent, timestamp, payload)` signs with it. Use them when one answer carries several signed intents that must share a timestamp (for example a measurement and a binding to the file measured). A `Timestamp` can only come from `now()` (or `Timestamp::from_ms` under `test-utils`), so production code still never signs a time it chose.
 - `sign_intent_at` (feature `test-utils`) takes a fixed timestamp for vectors.
 - There is no raw-bytes signing API.
 

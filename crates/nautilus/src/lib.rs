@@ -20,7 +20,8 @@ pub use context::NautilusContext;
 pub use crypto::{EnclaveIdentity, PublicKeyBytes, SignatureBytes, Signer};
 pub use error::{AttestationError, NautilusError};
 pub use intent::{
-    Intent, IntentMessage, SignedResponse, intent_message, now_ms, verify_signed_response,
+    Intent, IntentMessage, SignedResponse, Timestamp, intent_message, now_ms,
+    verify_signed_response,
 };
 pub use nsm::NsmAttestor;
 #[cfg(feature = "vsock")]

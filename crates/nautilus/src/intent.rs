@@ -91,6 +91,31 @@ pub fn now_ms() -> Result<u64, NautilusError> {
     Ok(LAST_NOW_MS.fetch_max(now, Ordering::Relaxed).max(now))
 }
 
+/// One reading of the enclave clock ([`NautilusContext::now`](crate::NautilusContext::now)),
+/// to sign several intents with the same timestamp. It can't be made from an arbitrary number
+/// outside tests: like [`NautilusContext::sign_intent`](crate::NautilusContext::sign_intent), it
+/// only ever stamps the time it was read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Timestamp(u64);
+
+impl Timestamp {
+    /// Reads the clock ([`now_ms`]).
+    pub(crate) fn now() -> Result<Self, NautilusError> {
+        now_ms().map(Self)
+    }
+
+    /// A fixed time, for vectors and tests.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn from_ms(timestamp_ms: u64) -> Self {
+        Self(timestamp_ms)
+    }
+
+    /// Unix time in milliseconds.
+    pub fn as_ms(self) -> u64 {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Serialize;
@@ -220,6 +245,41 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         assert!(signed.response.timestamp_ms.abs_diff(now) < 5_000);
+    }
+
+    #[test]
+    fn intents_signed_with_one_reading_share_its_timestamp() {
+        let ctx = context();
+        let stamp = ctx.now().unwrap();
+        let first = ctx
+            .sign_intent_stamped(Intent(0), stamp, payload())
+            .unwrap();
+        // Time moves on; the second intent still carries the first reading.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let second = ctx
+            .sign_intent_stamped(Intent(2), stamp, payload())
+            .unwrap();
+        assert_eq!(first.response.timestamp_ms, stamp.as_ms());
+        assert_eq!(second.response.timestamp_ms, stamp.as_ms());
+        verify_signed_response(&ctx.public_key(), Intent(0), &first).unwrap();
+        verify_signed_response(&ctx.public_key(), Intent(2), &second).unwrap();
+        // A stamped signature is the one sign_intent_at gives at that time.
+        let at = ctx
+            .sign_intent_at(Intent(0), stamp.as_ms(), payload())
+            .unwrap();
+        assert_eq!(first.signature, at.signature);
+    }
+
+    #[test]
+    fn a_reading_is_the_current_time_and_never_goes_back() {
+        let ctx = context();
+        let stamp = ctx.now().unwrap();
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(stamp.as_ms().abs_diff(wall) < 5_000);
+        assert!(ctx.now().unwrap() >= stamp);
     }
 
     #[test]
