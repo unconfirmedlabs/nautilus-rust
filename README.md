@@ -153,7 +153,7 @@ What an attestation does and does not prove: [docs/attestation.md](docs/attestat
 
 ## Host Side
 
-Enclaves have no network; the only I/O is vsock to the parent instance. With the `vsock` feature, `nautilus::serve_vsock(3000, app, config)` serves the router directly on enclave vsock port 3000 under the same connection limits as TCP; the image runs no bridge process. The parent still has to forward clients to the enclave, for example `socat TCP-LISTEN:3000,reuseaddr,fork,max-children=256 VSOCK-CONNECT:16:3000` for the CID `make run-eif` uses. Outbound calls need a bridge on both sides. See [docs/host-bridge.md](docs/host-bridge.md).
+Enclaves have no network; the only I/O is vsock to the parent instance. With the `vsock` feature, `nautilus::serve_vsock(3000, app, config)` serves the router directly on enclave vsock port 3000 under the same connection limits as TCP; the image runs no bridge process. The parent still has to forward clients to the enclave, for example `argonaut host 16 --inbound 127.0.0.1:3000=3000` for the CID `make run-eif` uses. Outbound calls need a bridge on both sides. See [docs/host-bridge.md](docs/host-bridge.md).
 
 [Argonaut](https://github.com/miraicloud/argonaut) is a separate Go companion binary for Nitro vsock bridging, config delivery and NSM proxying, maintained under the miraicloud organization. It is not part of this repository.
 
